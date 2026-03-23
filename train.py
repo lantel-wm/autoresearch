@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][docs] open_to_open_plus_alpha158_slow60",
+        description="[factor][docs] open_to_open_plus_alpha158_trendpos20",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -60,33 +60,6 @@ def build_experiment() -> ExperimentSpec:
                 "(Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume, 0), 20))"
                 "/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)",
                 "alpha_vsumd20",
-            ),
-            ("($close-Min($low, 60))/(Max($high, 60)-Min($low, 60)+1e-12)", "alpha_rsv60"),
-            ("Rsquare($close, 60)", "alpha_rsqr60"),
-            ("Resi($close, 60)/$close", "alpha_resi60"),
-            ("IdxMax($high, 60)/60", "alpha_imax60"),
-            ("IdxMin($low, 60)/60", "alpha_imin60"),
-            ("(IdxMax($high, 60)-IdxMin($low, 60))/60", "alpha_imxd60"),
-            ("Corr($close, Log($volume+1), 60)", "alpha_corr60"),
-            ("Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 60)", "alpha_cord60"),
-            (
-                "Mean($close>Ref($close, 1), 60)-Mean($close<Ref($close, 1), 60)",
-                "alpha_cntd60",
-            ),
-            (
-                "(Sum(Greater($close-Ref($close, 1), 0), 60)-Sum(Greater(Ref($close, 1)-$close, 0), 60))"
-                "/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)",
-                "alpha_sumd60",
-            ),
-            (
-                "Std(Abs($close/Ref($close, 1)-1)*$volume, 60)"
-                "/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 60)+1e-12)",
-                "alpha_wvma60",
-            ),
-            (
-                "(Sum(Greater($volume-Ref($volume, 1), 0), 60)-Sum(Greater(Ref($volume, 1)-$volume, 0), 60))"
-                "/(Sum(Abs($volume-Ref($volume, 1)), 60)+1e-12)",
-                "alpha_vsumd60",
             ),
         ],
         label_expression="Ref($open, -6) / Ref($open, -1) - 1",
