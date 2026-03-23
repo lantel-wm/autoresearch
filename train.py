@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[label][docs] open_to_open_3d",
+        description="[factor][docs] open3d_plus_updown20",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -42,9 +42,21 @@ def build_experiment() -> ExperimentSpec:
             ("(IdxMax($high, 20)-IdxMin($low, 20))/20", "alpha_imxd20"),
             ("Corr($close, Log($volume+1), 20)", "alpha_corr20"),
             ("Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)", "alpha_cord20"),
+            ("Mean($close>Ref($close, 1), 20)", "alpha_cntp20"),
+            ("Mean($close<Ref($close, 1), 20)", "alpha_cntn20"),
             (
                 "Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)",
                 "alpha_cntd20",
+            ),
+            (
+                "Sum(Greater($close-Ref($close, 1), 0), 20)"
+                "/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)",
+                "alpha_sump20",
+            ),
+            (
+                "Sum(Greater(Ref($close, 1)-$close, 0), 20)"
+                "/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)",
+                "alpha_sumn20",
             ),
             (
                 "(Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close, 0), 20))"
@@ -55,6 +67,16 @@ def build_experiment() -> ExperimentSpec:
                 "Std(Abs($close/Ref($close, 1)-1)*$volume, 20)"
                 "/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 20)+1e-12)",
                 "alpha_wvma20",
+            ),
+            (
+                "Sum(Greater($volume-Ref($volume, 1), 0), 20)"
+                "/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)",
+                "alpha_vsump20",
+            ),
+            (
+                "Sum(Greater(Ref($volume, 1)-$volume, 0), 20)"
+                "/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)",
+                "alpha_vsumn20",
             ),
             (
                 "(Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume, 0), 20))"
