@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[label][docs] open_to_open_3d",
+        description="[strategy][docs] open3d_top40_drop4",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -73,7 +73,7 @@ def build_experiment() -> ExperimentSpec:
             "min_child_samples": 100,
             "reg_lambda": 1.0,
         },
-        strategy_kwargs={"topk": 50, "n_drop": 5},
+        strategy_kwargs={"topk": 40, "n_drop": 4},
         seed=42,
     )
 
