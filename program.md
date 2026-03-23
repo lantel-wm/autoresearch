@@ -19,7 +19,7 @@ To set up a new run, work with the user to:
 
 ## Experimentation
 
-Each experiment runs in the local `qlib` conda environment. The fixed harness in `prepare.py` evaluates a candidate on three rolling yearly folds and enforces a hard wall-clock budget of 10 minutes.
+Each experiment runs in the local `qlib` conda environment. The fixed harness in `prepare.py` evaluates a candidate on five rolling yearly folds and enforces a hard wall-clock budget of 10 minutes.
 
 **What you CAN do:**
 - Modify `train.py` only.

@@ -146,7 +146,7 @@ If an experiment comes from external research, its description should begin with
 
 ## Experiment design
 
-Each candidate runs on three fixed rolling folds:
+Each candidate runs on five fixed rolling folds:
 
 1. train `2015-2019`, valid `2020`, test `2021`
 2. train `2016-2020`, valid `2021`, test `2022`
