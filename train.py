@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[strategy][docs] open3d_top35_drop3_core",
+        description="model_open3d_top35_core_reg",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -62,11 +62,12 @@ def build_experiment() -> ExperimentSpec:
         model_kwargs={
             "n_estimators": 300,
             "learning_rate": 0.05,
-            "num_leaves": 64,
+            "num_leaves": 48,
             "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "min_child_samples": 100,
-            "reg_lambda": 1.0,
+            "colsample_bytree": 0.7,
+            "min_child_samples": 160,
+            "reg_alpha": 0.1,
+            "reg_lambda": 2.0,
         },
         strategy_kwargs={"topk": 35, "n_drop": 3},
         seed=42,
