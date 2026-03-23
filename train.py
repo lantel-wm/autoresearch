@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][docs] open3d_top35_drop3_plus_imxd20",
+        description="[strategy][docs] open3d_top35_drop3_core",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -35,7 +35,6 @@ def build_experiment() -> ExperimentSpec:
             ("(Less($open, $close)-$low)/($high-$low+1e-12)", "alpha_klow2"),
             ("(2*$close-$high-$low)/($high-$low+1e-12)", "alpha_ksft2"),
             ("($close-Min($low, 20))/(Max($high, 20)-Min($low, 20)+1e-12)", "alpha_rsv20"),
-            ("(IdxMax($high, 20)-IdxMin($low, 20))/20", "alpha_imxd20"),
             ("Corr($close, Log($volume+1), 20)", "alpha_corr20"),
             ("Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)", "alpha_cord20"),
             (
