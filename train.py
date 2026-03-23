@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][docs] open3d_top40_alpha158_core",
+        description="[label][docs] open3d_capped12",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -57,7 +57,9 @@ def build_experiment() -> ExperimentSpec:
                 "alpha_vsumd20",
             ),
         ],
-        label_expression="Ref($open, -4) / Ref($open, -1) - 1",
+        label_expression=(
+            "Greater(Less(Ref($open, -4) / Ref($open, -1) - 1, 0.12), -0.12)"
+        ),
         model_type="lgbm",
         model_kwargs={
             "n_estimators": 300,
