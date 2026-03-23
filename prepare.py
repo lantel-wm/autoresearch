@@ -1,389 +1,594 @@
 """
-One-time data preparation for autoresearch experiments.
-Downloads data shards and trains a BPE tokenizer.
+Fixed Qlib harness for autoresearch-style quant experiments.
 
-Usage:
-    python prepare.py                  # full prep (download + tokenizer)
-    python prepare.py --num-shards 8   # download only 8 shards (for testing)
-
-Data and tokenizer are stored in ~/.cache/autoresearch/.
+`prepare.py` is read-only during the experiment loop. It owns:
+- provider validation
+- fold definitions
+- data loading from the local Qlib provider
+- model fitting and backtest evaluation
+- run summary serialization
+- keep/discard status decisions against the current kept baseline
 """
 
+from __future__ import annotations
+
+import argparse
+import json
+import math
 import os
+import subprocess
 import sys
 import time
-import math
-import argparse
-import pickle
-from multiprocessing import Pool
+import traceback
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
-import requests
-import pyarrow.parquet as pq
-import rustbpe
-import tiktoken
-import torch
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+import qlib
+from qlib.constant import REG_CN
+from qlib.data import D
 
-# ---------------------------------------------------------------------------
-# Constants (fixed, do not modify)
-# ---------------------------------------------------------------------------
+# Keep matplotlib and similar libraries from trying to write to ~/.matplotlib.
+DEFAULT_MPLCONFIGDIR = Path("tmp/mplconfig").resolve()
+os.environ.setdefault("MPLCONFIGDIR", str(DEFAULT_MPLCONFIGDIR))
+Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
-MAX_SEQ_LEN = 2048       # context length
-TIME_BUDGET = 300        # training time budget in seconds (5 minutes)
-EVAL_TOKENS = 40 * 524288  # number of tokens for val eval
+TIME_BUDGET_SECONDS = 600
+DEFAULT_PROVIDER_URI = Path("data/qlib_bin_daily_hfq")
+DEFAULT_MARKET = "ashare_mainboard_no_st"
+DEFAULT_BENCHMARK = "SH000300"
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+DEFAULT_TOPK = 50
+DEFAULT_N_DROP = 5
+OPEN_COST = 0.0005
+CLOSE_COST = 0.0015
+MIN_COST = 5.0
+ACCOUNT_SIZE = 1_000_000.0
 
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch")
-DATA_DIR = os.path.join(CACHE_DIR, "data")
-TOKENIZER_DIR = os.path.join(CACHE_DIR, "tokenizer")
-BASE_URL = "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/main"
-MAX_SHARD = 6542 # the last datashard is shard_06542.parquet
-VAL_SHARD = MAX_SHARD  # pinned validation shard (shard_06542)
-VAL_FILENAME = f"shard_{VAL_SHARD:05d}.parquet"
-VOCAB_SIZE = 8192
+RESULTS_TSV_PATH = Path("results.tsv")
+RUN_JSON_PATH = Path("run.json")
 
-# BPE split pattern (GPT-4 style, with \p{N}{1,2} instead of {1,3})
-SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
+TRADE_RETURN_EXPR = "Ref($open, -2) / Ref($open, -1) - 1"
+RESULTS_HEADER = [
+    "commit",
+    "sharpe",
+    "rank_ic",
+    "turnover",
+    "max_drawdown",
+    "status",
+    "description",
+]
 
-SPECIAL_TOKENS = [f"<|reserved_{i}|>" for i in range(4)]
-BOS_TOKEN = "<|reserved_0|>"
-
-# ---------------------------------------------------------------------------
-# Data download
-# ---------------------------------------------------------------------------
-
-def download_single_shard(index):
-    """Download one parquet shard with retries. Returns True on success."""
-    filename = f"shard_{index:05d}.parquet"
-    filepath = os.path.join(DATA_DIR, filename)
-    if os.path.exists(filepath):
-        return True
-
-    url = f"{BASE_URL}/{filename}"
-    max_attempts = 5
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = requests.get(url, stream=True, timeout=30)
-            response.raise_for_status()
-            temp_path = filepath + ".tmp"
-            with open(temp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-            os.rename(temp_path, filepath)
-            print(f"  Downloaded {filename}")
-            return True
-        except (requests.RequestException, IOError) as e:
-            print(f"  Attempt {attempt}/{max_attempts} failed for {filename}: {e}")
-            for path in [filepath + ".tmp", filepath]:
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-            if attempt < max_attempts:
-                time.sleep(2 ** attempt)
-    return False
+_QLIB_INITIALIZED_URI: str | None = None
 
 
-def download_data(num_shards, download_workers=8):
-    """Download training shards + pinned validation shard."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    num_train = min(num_shards, MAX_SHARD)
-    ids = list(range(num_train))
-    if VAL_SHARD not in ids:
-        ids.append(VAL_SHARD)
+@dataclass(frozen=True)
+class Fold:
+    name: str
+    train_start: str
+    train_end: str
+    valid_start: str
+    valid_end: str
+    test_start: str
+    test_end: str
 
-    # Count what's already downloaded
-    existing = sum(1 for i in ids if os.path.exists(os.path.join(DATA_DIR, f"shard_{i:05d}.parquet")))
-    if existing == len(ids):
-        print(f"Data: all {len(ids)} shards already downloaded at {DATA_DIR}")
+
+@dataclass
+class ExperimentSpec:
+    description: str
+    feature_expressions: list[tuple[str, str]]
+    label_expression: str
+    model_type: str = "lgbm"
+    model_kwargs: dict[str, Any] = field(default_factory=dict)
+    strategy_kwargs: dict[str, Any] = field(
+        default_factory=lambda: {"topk": DEFAULT_TOPK, "n_drop": DEFAULT_N_DROP}
+    )
+    seed: int = 42
+
+
+@dataclass
+class FoldMetrics:
+    fold: str
+    sharpe: float
+    rank_ic: float
+    turnover: float
+    max_drawdown: float
+    annual_return: float
+    num_days: int
+
+
+@dataclass
+class RunSummary:
+    commit: str
+    description: str
+    status: str
+    mean_sharpe: float
+    mean_rank_ic: float
+    mean_turnover: float
+    mean_max_drawdown: float
+    mean_annual_return: float
+    runtime_seconds: float
+    provider_uri: str
+    market: str
+    folds: list[FoldMetrics] = field(default_factory=list)
+    error: str | None = None
+
+
+ROLLING_FOLDS = [
+    Fold("fold_2023", "2017-01-01", "2021-12-31", "2022-01-01", "2022-12-31", "2023-01-01", "2023-12-31"),
+    Fold("fold_2024", "2018-01-01", "2022-12-31", "2023-01-01", "2023-12-31", "2024-01-01", "2024-12-31"),
+    Fold("fold_2025", "2019-01-01", "2023-12-31", "2024-01-01", "2024-12-31", "2025-01-01", "2025-12-31"),
+]
+
+
+def get_provider_uri() -> Path:
+    return Path(os.environ.get("QLIB_PROVIDER_URI", str(DEFAULT_PROVIDER_URI))).expanduser()
+
+
+def require_provider(provider_uri: Path) -> None:
+    required_paths = [
+        provider_uri,
+        provider_uri / "calendars",
+        provider_uri / "features",
+        provider_uri / "instruments",
+    ]
+    missing = [str(path) for path in required_paths if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Qlib provider is missing. Expected local provider at "
+            f"{provider_uri}. Missing paths: {', '.join(missing)}"
+        )
+
+
+def init_qlib(provider_uri: Path) -> None:
+    global _QLIB_INITIALIZED_URI
+    provider_uri_str = str(provider_uri.resolve())
+    if _QLIB_INITIALIZED_URI == provider_uri_str:
         return
-
-    needed = len(ids) - existing
-    print(f"Data: downloading {needed} shards ({existing} already exist)...")
-
-    workers = max(1, min(download_workers, needed))
-    with Pool(processes=workers) as pool:
-        results = pool.map(download_single_shard, ids)
-
-    ok = sum(1 for r in results if r)
-    print(f"Data: {ok}/{len(ids)} shards ready at {DATA_DIR}")
-
-# ---------------------------------------------------------------------------
-# Tokenizer training
-# ---------------------------------------------------------------------------
-
-def list_parquet_files():
-    """Return sorted list of parquet file paths in the data directory."""
-    files = sorted(f for f in os.listdir(DATA_DIR) if f.endswith(".parquet") and not f.endswith(".tmp"))
-    return [os.path.join(DATA_DIR, f) for f in files]
+    qlib.init(provider_uri=provider_uri_str, region=REG_CN)
+    _QLIB_INITIALIZED_URI = provider_uri_str
 
 
-def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
-    """Yield documents from training split (all shards except pinned val shard)."""
-    parquet_paths = [p for p in list_parquet_files() if not p.endswith(VAL_FILENAME)]
-    nchars = 0
-    for filepath in parquet_paths:
-        pf = pq.ParquetFile(filepath)
-        for rg_idx in range(pf.num_row_groups):
-            rg = pf.read_row_group(rg_idx)
-            for text in rg.column("text").to_pylist():
-                doc = text[:doc_cap] if len(text) > doc_cap else text
-                nchars += len(doc)
-                yield doc
-                if nchars >= max_chars:
-                    return
+def check_provider(provider_uri: Path) -> None:
+    require_provider(provider_uri)
+    init_qlib(provider_uri)
+
+    instruments = D.instruments(DEFAULT_MARKET)
+    sample = D.features(
+        instruments,
+        ["$open", "$close", "$volume", "$turnover_rate"],
+        start_time=ROLLING_FOLDS[-1].test_start,
+        end_time=ROLLING_FOLDS[-1].test_end,
+    )
+    sample = normalize_feature_frame(sample)
+    if sample.empty:
+        raise RuntimeError(
+            "Provider check passed structurally, but querying sample features returned no rows. "
+            f"Check market '{DEFAULT_MARKET}' and date coverage."
+        )
 
 
-def train_tokenizer():
-    """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
-    tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
-    token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
+def validate_experiment_spec(spec: ExperimentSpec) -> None:
+    if not spec.description.strip():
+        raise ValueError("Experiment description must be non-empty.")
+    if "\t" in spec.description or "\n" in spec.description:
+        raise ValueError("Experiment description must be a single TSV-safe line.")
+    if spec.model_type != "lgbm":
+        raise ValueError("Only model_type='lgbm' is supported in v1.")
+    if not spec.feature_expressions:
+        raise ValueError("At least one feature expression is required.")
 
-    if os.path.exists(tokenizer_pkl) and os.path.exists(token_bytes_path):
-        print(f"Tokenizer: already trained at {TOKENIZER_DIR}")
-        return
+    aliases = [alias for _, alias in spec.feature_expressions]
+    if len(set(aliases)) != len(aliases):
+        raise ValueError("Feature aliases must be unique.")
+    if any(alias in {"label", "trade_return"} for alias in aliases):
+        raise ValueError("Feature aliases cannot reuse reserved names: label, trade_return.")
 
-    os.makedirs(TOKENIZER_DIR, exist_ok=True)
+    all_expressions = [expr for expr, _ in spec.feature_expressions] + [spec.label_expression]
+    if any("vwap" in expr.lower() for expr in all_expressions):
+        raise ValueError("This workflow does not support vwap-based expressions.")
 
-    parquet_files = list_parquet_files()
-    if len(parquet_files) < 2:
-        print("Tokenizer: need at least 2 data shards (1 train + 1 val). Download more data first.")
-        sys.exit(1)
+    strategy = spec.strategy_kwargs
+    if int(strategy.get("topk", DEFAULT_TOPK)) <= 0:
+        raise ValueError("strategy_kwargs.topk must be positive.")
+    if int(strategy.get("n_drop", DEFAULT_N_DROP)) < 0:
+        raise ValueError("strategy_kwargs.n_drop must be non-negative.")
 
-    # --- Train with rustbpe ---
-    print("Tokenizer: training BPE tokenizer...")
-    t0 = time.time()
 
-    tokenizer = rustbpe.Tokenizer()
-    vocab_size_no_special = VOCAB_SIZE - len(SPECIAL_TOKENS)
-    tokenizer.train_from_iterator(text_iterator(), vocab_size_no_special, pattern=SPLIT_PATTERN)
+def normalize_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(frame.index, pd.MultiIndex) or frame.index.nlevels != 2:
+        raise RuntimeError("Expected Qlib feature frame with a 2-level MultiIndex.")
 
-    # Build tiktoken encoding from trained merges
-    pattern = tokenizer.get_pattern()
-    mergeable_ranks = {bytes(k): v for k, v in tokenizer.get_mergeable_ranks()}
-    tokens_offset = len(mergeable_ranks)
-    special_tokens = {name: tokens_offset + i for i, name in enumerate(SPECIAL_TOKENS)}
-    enc = tiktoken.Encoding(
-        name="rustbpe",
-        pat_str=pattern,
-        mergeable_ranks=mergeable_ranks,
-        special_tokens=special_tokens,
+    normalized = frame.copy()
+    level0 = normalized.index.get_level_values(0)
+    if np.issubdtype(level0.dtype, np.datetime64):
+        normalized = normalized.reorder_levels([1, 0])
+    normalized.index = normalized.index.set_names(["instrument", "datetime"])
+    normalized = normalized.sort_index()
+    return normalized
+
+
+def slice_dates(frame: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    dates = frame.index.get_level_values("datetime")
+    mask = (dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))
+    return frame.loc[mask].copy()
+
+
+def fetch_panel(spec: ExperimentSpec) -> pd.DataFrame:
+    provider_uri = get_provider_uri()
+    require_provider(provider_uri)
+    init_qlib(provider_uri)
+
+    fields = [expr for expr, _ in spec.feature_expressions]
+    aliases = [alias for _, alias in spec.feature_expressions]
+    fields.extend([spec.label_expression, TRADE_RETURN_EXPR])
+    aliases.extend(["label", "trade_return"])
+
+    start_time = min(fold.train_start for fold in ROLLING_FOLDS)
+    end_time = max(fold.test_end for fold in ROLLING_FOLDS)
+
+    raw = D.features(D.instruments(DEFAULT_MARKET), fields, start_time=start_time, end_time=end_time)
+    frame = normalize_feature_frame(raw)
+    frame.columns = aliases
+    frame = frame.replace([np.inf, -np.inf], np.nan)
+    return frame
+
+
+def build_model(spec: ExperimentSpec) -> lgb.LGBMRegressor:
+    kwargs = {
+        "objective": "regression",
+        "n_estimators": 300,
+        "learning_rate": 0.05,
+        "num_leaves": 64,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "min_child_samples": 100,
+        "reg_alpha": 0.0,
+        "reg_lambda": 1.0,
+        "random_state": spec.seed,
+        "n_jobs": -1,
+        "verbosity": -1,
+    }
+    kwargs.update(spec.model_kwargs)
+    return lgb.LGBMRegressor(**kwargs)
+
+
+def ensure_time_budget(start_time: float) -> None:
+    elapsed = time.perf_counter() - start_time
+    if elapsed > TIME_BUDGET_SECONDS:
+        raise TimeoutError(f"Experiment exceeded {TIME_BUDGET_SECONDS} seconds.")
+
+
+def run_fold(spec: ExperimentSpec, panel: pd.DataFrame, fold: Fold, start_time: float) -> FoldMetrics:
+    ensure_time_budget(start_time)
+
+    feature_names = [alias for _, alias in spec.feature_expressions]
+    train_frame = slice_dates(panel, fold.train_start, fold.train_end)
+    valid_frame = slice_dates(panel, fold.valid_start, fold.valid_end)
+    test_frame = slice_dates(panel, fold.test_start, fold.test_end)
+
+    train_frame = train_frame.dropna(subset=["label"])
+    valid_frame = valid_frame.dropna(subset=["label"])
+    test_frame = test_frame.dropna(subset=["label", "trade_return"])
+    if train_frame.empty or valid_frame.empty or test_frame.empty:
+        raise RuntimeError(f"{fold.name} has empty train/valid/test slices.")
+
+    model = build_model(spec)
+    fit_kwargs: dict[str, Any] = {
+        "X": train_frame[feature_names],
+        "y": train_frame["label"],
+        "eval_set": [(valid_frame[feature_names], valid_frame["label"])],
+        "eval_metric": "l2",
+        "callbacks": [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=0)],
+    }
+    model.fit(**fit_kwargs)
+    ensure_time_budget(start_time)
+
+    model_iteration = getattr(model, "best_iteration_", None) or getattr(model, "n_estimators_", None)
+    predictions = model.predict(test_frame[feature_names], num_iteration=model_iteration)
+    scored = test_frame.copy()
+    scored["score"] = predictions
+
+    rank_ic_series = scored.groupby(level="datetime").apply(compute_daily_rank_ic)
+    daily_returns, turnovers = run_topk_dropout_backtest(
+        scored,
+        topk=int(spec.strategy_kwargs.get("topk", DEFAULT_TOPK)),
+        n_drop=int(spec.strategy_kwargs.get("n_drop", DEFAULT_N_DROP)),
     )
 
-    # Save tokenizer
-    with open(tokenizer_pkl, "wb") as f:
-        pickle.dump(enc, f)
+    return FoldMetrics(
+        fold=fold.name,
+        sharpe=compute_sharpe(daily_returns),
+        rank_ic=float(rank_ic_series.mean(skipna=True) or 0.0),
+        turnover=float(turnovers.mean() or 0.0) if not turnovers.empty else 0.0,
+        max_drawdown=compute_max_drawdown(daily_returns),
+        annual_return=compute_annual_return(daily_returns),
+        num_days=int(len(daily_returns)),
+    )
 
-    t1 = time.time()
-    print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_pkl}")
 
-    # --- Build token_bytes lookup for BPB evaluation ---
-    print("Tokenizer: building token_bytes lookup...")
-    special_set = set(SPECIAL_TOKENS)
-    token_bytes_list = []
-    for token_id in range(enc.n_vocab):
-        token_str = enc.decode([token_id])
-        if token_str in special_set:
-            token_bytes_list.append(0)
+def compute_daily_rank_ic(day_frame: pd.DataFrame) -> float:
+    usable = day_frame.dropna(subset=["score", "label"])
+    if len(usable) < 2:
+        return float("nan")
+    if usable["score"].nunique() < 2 or usable["label"].nunique() < 2:
+        return float("nan")
+    return float(usable["score"].corr(usable["label"], method="spearman"))
+
+
+def run_topk_dropout_backtest(
+    frame: pd.DataFrame,
+    *,
+    topk: int,
+    n_drop: int,
+) -> tuple[pd.Series, pd.Series]:
+    records = frame.reset_index()[["instrument", "datetime", "score", "trade_return"]]
+    holdings: list[str] = []
+    previous_weights = pd.Series(dtype=float)
+    daily_returns: list[tuple[pd.Timestamp, float]] = []
+    turnovers: list[tuple[pd.Timestamp, float]] = []
+
+    for date, day in records.groupby("datetime", sort=True):
+        day = day.replace([np.inf, -np.inf], np.nan).dropna(subset=["score", "trade_return"])
+        if day.empty:
+            continue
+        day = day.sort_values(["score", "instrument"], ascending=[False, True])
+        available_scores = dict(zip(day["instrument"], day["score"]))
+
+        if not holdings:
+            target_holdings = day["instrument"].head(topk).tolist()
         else:
-            token_bytes_list.append(len(token_str.encode("utf-8")))
-    token_bytes_tensor = torch.tensor(token_bytes_list, dtype=torch.int32)
-    torch.save(token_bytes_tensor, token_bytes_path)
-    print(f"Tokenizer: saved token_bytes to {token_bytes_path}")
+            weakest_holdings = sorted(holdings, key=lambda inst: available_scores.get(inst, -np.inf))
+            sell_candidates = weakest_holdings[: min(n_drop, len(weakest_holdings))]
+            target_holdings = [
+                instrument
+                for instrument in holdings
+                if instrument not in sell_candidates and instrument in available_scores
+            ]
+            for instrument in day["instrument"]:
+                if instrument not in target_holdings:
+                    target_holdings.append(instrument)
+                if len(target_holdings) >= topk:
+                    break
 
-    # Sanity check
-    test = "Hello world! Numbers: 123. Unicode: 你好"
-    encoded = enc.encode_ordinary(test)
-    decoded = enc.decode(encoded)
-    assert decoded == test, f"Tokenizer roundtrip failed: {test!r} -> {decoded!r}"
-    print(f"Tokenizer: sanity check passed (vocab_size={enc.n_vocab})")
+        if not target_holdings:
+            continue
 
-# ---------------------------------------------------------------------------
-# Runtime utilities (imported by train.py)
-# ---------------------------------------------------------------------------
+        day_by_instrument = day.set_index("instrument")
+        target_holdings = [instrument for instrument in target_holdings if instrument in day_by_instrument.index]
+        if not target_holdings:
+            continue
 
-class Tokenizer:
-    """Minimal tokenizer wrapper. Training is handled above."""
+        weight = 1.0 / len(target_holdings)
+        current_weights = pd.Series(weight, index=target_holdings, dtype=float)
+        turnover = 0.5 * current_weights.sub(previous_weights, fill_value=0.0).abs().sum()
 
-    def __init__(self, enc):
-        self.enc = enc
-        self.bos_token_id = enc.encode_single_token(BOS_TOKEN)
+        buy_weight = current_weights.sub(previous_weights, fill_value=0.0).clip(lower=0.0).sum()
+        sell_weight = previous_weights.sub(current_weights, fill_value=0.0).clip(lower=0.0).sum()
+        cost = buy_weight * OPEN_COST + sell_weight * CLOSE_COST
+        if buy_weight > 0:
+            cost += MIN_COST / ACCOUNT_SIZE
+        if sell_weight > 0:
+            cost += MIN_COST / ACCOUNT_SIZE
 
-    @classmethod
-    def from_directory(cls, tokenizer_dir=TOKENIZER_DIR):
-        with open(os.path.join(tokenizer_dir, "tokenizer.pkl"), "rb") as f:
-            enc = pickle.load(f)
-        return cls(enc)
+        gross_return = float(day_by_instrument.loc[target_holdings, "trade_return"].mean())
+        net_return = gross_return - cost
+        daily_returns.append((pd.Timestamp(date), net_return))
+        turnovers.append((pd.Timestamp(date), float(turnover)))
 
-    def get_vocab_size(self):
-        return self.enc.n_vocab
+        holdings = list(current_weights.index)
+        previous_weights = current_weights
 
-    def get_bos_token_id(self):
-        return self.bos_token_id
-
-    def encode(self, text, prepend=None, num_threads=8):
-        if prepend is not None:
-            prepend_id = prepend if isinstance(prepend, int) else self.enc.encode_single_token(prepend)
-        if isinstance(text, str):
-            ids = self.enc.encode_ordinary(text)
-            if prepend is not None:
-                ids.insert(0, prepend_id)
-        elif isinstance(text, list):
-            ids = self.enc.encode_ordinary_batch(text, num_threads=num_threads)
-            if prepend is not None:
-                for row in ids:
-                    row.insert(0, prepend_id)
-        else:
-            raise ValueError(f"Invalid input type: {type(text)}")
-        return ids
-
-    def decode(self, ids):
-        return self.enc.decode(ids)
+    return (
+        pd.Series({date: value for date, value in daily_returns}, dtype=float).sort_index(),
+        pd.Series({date: value for date, value in turnovers}, dtype=float).sort_index(),
+    )
 
 
-def get_token_bytes(device="cpu"):
-    path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
-    with open(path, "rb") as f:
-        return torch.load(f, map_location=device)
+def compute_sharpe(returns: pd.Series) -> float:
+    if len(returns) < 2:
+        return 0.0
+    std = float(returns.std(ddof=1))
+    if std <= 1e-12:
+        return 0.0
+    return float(math.sqrt(252.0) * returns.mean() / std)
 
 
-def _document_batches(split, tokenizer_batch_size=128):
-    """Infinite iterator over document batches from parquet files."""
-    parquet_paths = list_parquet_files()
-    assert len(parquet_paths) > 0, "No parquet files found. Run prepare.py first."
-    val_path = os.path.join(DATA_DIR, VAL_FILENAME)
-    if split == "train":
-        parquet_paths = [p for p in parquet_paths if p != val_path]
-        assert len(parquet_paths) > 0, "No training shards found."
-    else:
-        parquet_paths = [val_path]
-    epoch = 1
-    while True:
-        for filepath in parquet_paths:
-            pf = pq.ParquetFile(filepath)
-            for rg_idx in range(pf.num_row_groups):
-                rg = pf.read_row_group(rg_idx)
-                batch = rg.column('text').to_pylist()
-                for i in range(0, len(batch), tokenizer_batch_size):
-                    yield batch[i:i+tokenizer_batch_size], epoch
-        epoch += 1
+def compute_annual_return(returns: pd.Series) -> float:
+    if returns.empty:
+        return 0.0
+    equity = (1.0 + returns).cumprod()
+    total_days = len(returns)
+    if total_days == 0 or equity.iloc[-1] <= 0:
+        return 0.0
+    return float(equity.iloc[-1] ** (252.0 / total_days) - 1.0)
 
 
-def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
-    """
-    BOS-aligned dataloader with best-fit packing.
-    Every row starts with BOS. Documents packed using best-fit to minimize cropping.
-    When no document fits remaining space, crops shortest doc to fill exactly.
-    100% utilization (no padding).
-    """
-    assert split in ["train", "val"]
-    row_capacity = T + 1
-    batches = _document_batches(split)
-    bos_token = tokenizer.get_bos_token_id()
-    doc_buffer = []
-    epoch = 1
+def compute_max_drawdown(returns: pd.Series) -> float:
+    if returns.empty:
+        return 0.0
+    equity = (1.0 + returns).cumprod()
+    drawdown = equity / equity.cummax() - 1.0
+    return float(abs(drawdown.min()))
 
-    def refill_buffer():
-        nonlocal epoch
-        doc_batch, epoch = next(batches)
-        token_lists = tokenizer.encode(doc_batch, prepend=bos_token)
-        doc_buffer.extend(token_lists)
 
-    # Pre-allocate buffers: [inputs (B*T) | targets (B*T)]
-    row_buffer = torch.empty((B, row_capacity), dtype=torch.long)
-    cpu_buffer = torch.empty(2 * B * T, dtype=torch.long, pin_memory=True)
-    gpu_buffer = torch.empty(2 * B * T, dtype=torch.long, device="cuda")
-    cpu_inputs = cpu_buffer[:B * T].view(B, T)
-    cpu_targets = cpu_buffer[B * T:].view(B, T)
-    inputs = gpu_buffer[:B * T].view(B, T)
-    targets = gpu_buffer[B * T:].view(B, T)
+def aggregate_summary(
+    *,
+    spec: ExperimentSpec,
+    folds: list[FoldMetrics],
+    runtime_seconds: float,
+    status: str,
+    error: str | None = None,
+) -> RunSummary:
+    return RunSummary(
+        commit=current_commit_hash(),
+        description=spec.description,
+        status=status,
+        mean_sharpe=float(np.mean([fold.sharpe for fold in folds])) if folds else 0.0,
+        mean_rank_ic=float(np.mean([fold.rank_ic for fold in folds])) if folds else 0.0,
+        mean_turnover=float(np.mean([fold.turnover for fold in folds])) if folds else 0.0,
+        mean_max_drawdown=float(np.mean([fold.max_drawdown for fold in folds])) if folds else 0.0,
+        mean_annual_return=float(np.mean([fold.annual_return for fold in folds])) if folds else 0.0,
+        runtime_seconds=runtime_seconds,
+        provider_uri=str(get_provider_uri()),
+        market=DEFAULT_MARKET,
+        folds=folds,
+        error=error,
+    )
 
-    while True:
-        for row_idx in range(B):
-            pos = 0
-            while pos < row_capacity:
-                while len(doc_buffer) < buffer_size:
-                    refill_buffer()
 
-                remaining = row_capacity - pos
+def current_commit_hash() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return "unknown"
 
-                # Find largest doc that fits entirely
-                best_idx = -1
-                best_len = 0
-                for i, doc in enumerate(doc_buffer):
-                    doc_len = len(doc)
-                    if doc_len <= remaining and doc_len > best_len:
-                        best_idx = i
-                        best_len = doc_len
 
-                if best_idx >= 0:
-                    doc = doc_buffer.pop(best_idx)
-                    row_buffer[row_idx, pos:pos + len(doc)] = torch.tensor(doc, dtype=torch.long)
-                    pos += len(doc)
-                else:
-                    # No doc fits — crop shortest to fill remaining
-                    shortest_idx = min(range(len(doc_buffer)), key=lambda i: len(doc_buffer[i]))
-                    doc = doc_buffer.pop(shortest_idx)
-                    row_buffer[row_idx, pos:pos + remaining] = torch.tensor(doc[:remaining], dtype=torch.long)
-                    pos += remaining
+def load_current_baseline() -> dict[str, float] | None:
+    if not RESULTS_TSV_PATH.exists() or RESULTS_TSV_PATH.stat().st_size == 0:
+        return None
 
-        cpu_inputs.copy_(row_buffer[:, :-1])
-        cpu_targets.copy_(row_buffer[:, 1:])
-        gpu_buffer.copy_(cpu_buffer, non_blocking=True)
-        yield inputs, targets, epoch
+    results = pd.read_csv(RESULTS_TSV_PATH, sep="\t")
+    kept = results[results["status"] == "keep"]
+    if kept.empty:
+        return None
 
-# ---------------------------------------------------------------------------
-# Evaluation (DO NOT CHANGE — this is the fixed metric)
-# ---------------------------------------------------------------------------
+    latest = kept.iloc[-1]
+    return {
+        "sharpe": float(latest["sharpe"]),
+        "rank_ic": float(latest["rank_ic"]),
+        "turnover": float(latest["turnover"]),
+        "max_drawdown": float(latest["max_drawdown"]),
+    }
 
-@torch.no_grad()
-def evaluate_bpb(model, tokenizer, batch_size):
-    """
-    Bits per byte (BPB): vocab size-independent evaluation metric.
-    Sums per-token cross-entropy (in nats), sums target byte lengths,
-    then converts nats/byte to bits/byte. Special tokens (byte length 0)
-    are excluded from both sums.
-    Uses fixed MAX_SEQ_LEN so results are comparable across configs.
-    """
-    token_bytes = get_token_bytes(device="cuda")
-    val_loader = make_dataloader(tokenizer, batch_size, MAX_SEQ_LEN, "val")
-    steps = EVAL_TOKENS // (batch_size * MAX_SEQ_LEN)
-    total_nats = 0.0
-    total_bytes = 0
-    for _ in range(steps):
-        x, y, _ = next(val_loader)
-        loss_flat = model(x, y, reduction='none').view(-1)
-        y_flat = y.view(-1)
-        nbytes = token_bytes[y_flat]
-        mask = nbytes > 0
-        total_nats += (loss_flat * mask).sum().item()
-        total_bytes += nbytes.sum().item()
-    return total_nats / (math.log(2) * total_bytes)
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def decide_status(summary: RunSummary) -> str:
+    baseline = load_current_baseline()
+    if baseline is None:
+        return "keep"
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare data and tokenizer for autoresearch")
-    parser.add_argument("--num-shards", type=int, default=10, help="Number of training shards to download (-1 = all). Val shard is always pinned.")
-    parser.add_argument("--download-workers", type=int, default=8, help="Number of parallel download workers")
+    if summary.mean_rank_ic <= 0.0:
+        return "discard"
+    if baseline["turnover"] > 0 and summary.mean_turnover > baseline["turnover"] * 1.25:
+        return "discard"
+    if baseline["max_drawdown"] > 0 and summary.mean_max_drawdown > baseline["max_drawdown"] * 1.25:
+        return "discard"
+    if summary.mean_sharpe >= baseline["sharpe"] + 0.05:
+        return "keep"
+    return "discard"
+
+
+def ensure_results_header() -> None:
+    if RESULTS_TSV_PATH.exists():
+        return
+    RESULTS_TSV_PATH.write_text("\t".join(RESULTS_HEADER) + "\n", encoding="utf-8")
+
+
+def append_results_tsv(summary: RunSummary) -> None:
+    ensure_results_header()
+    row = [
+        summary.commit,
+        f"{summary.mean_sharpe:.6f}",
+        f"{summary.mean_rank_ic:.6f}",
+        f"{summary.mean_turnover:.6f}",
+        f"{summary.mean_max_drawdown:.6f}",
+        summary.status,
+        sanitize_tsv_field(summary.description),
+    ]
+    with RESULTS_TSV_PATH.open("a", encoding="utf-8") as handle:
+        handle.write("\t".join(row) + "\n")
+
+
+def sanitize_tsv_field(value: str) -> str:
+    return value.replace("\t", " ").replace("\n", " ").strip()
+
+
+def write_run_json(summary: RunSummary) -> None:
+    RUN_JSON_PATH.write_text(json.dumps(asdict(summary), indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def print_summary(summary: RunSummary) -> None:
+    print("---")
+    print(f"status:           {summary.status}")
+    print(f"mean_sharpe:      {summary.mean_sharpe:.6f}")
+    print(f"mean_rank_ic:     {summary.mean_rank_ic:.6f}")
+    print(f"mean_turnover:    {summary.mean_turnover:.6f}")
+    print(f"mean_max_drawdown:{summary.mean_max_drawdown:.6f}")
+    print(f"mean_annual_return:{summary.mean_annual_return:.6f}")
+    print(f"runtime_seconds:  {summary.runtime_seconds:.1f}")
+    print(f"description:      {summary.description}")
+    if summary.error:
+        print(f"error:            {summary.error}")
+
+
+def run_experiment(spec: ExperimentSpec) -> RunSummary:
+    validate_experiment_spec(spec)
+    start_time = time.perf_counter()
+    folds: list[FoldMetrics] = []
+
+    try:
+        provider_uri = get_provider_uri()
+        check_provider(provider_uri)
+        panel = fetch_panel(spec)
+        for fold in ROLLING_FOLDS:
+            folds.append(run_fold(spec, panel, fold, start_time))
+
+        runtime_seconds = time.perf_counter() - start_time
+        summary = aggregate_summary(
+            spec=spec,
+            folds=folds,
+            runtime_seconds=runtime_seconds,
+            status="pending",
+        )
+        summary.status = decide_status(summary)
+    except Exception as exc:
+        runtime_seconds = time.perf_counter() - start_time
+        error = f"{exc.__class__.__name__}: {exc}"
+        print(traceback.format_exc(), file=sys.stderr)
+        summary = aggregate_summary(
+            spec=spec,
+            folds=folds,
+            runtime_seconds=runtime_seconds,
+            status="crash",
+            error=error,
+        )
+
+    write_run_json(summary)
+    append_results_tsv(summary)
+    print_summary(summary)
+    return summary
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Fixed Qlib harness for autoresearch-style quant experiments.")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Validate the local provider and exit.",
+    )
     args = parser.parse_args()
 
-    num_shards = MAX_SHARD if args.num_shards == -1 else args.num_shards
+    if args.check:
+        try:
+            check_provider(get_provider_uri())
+        except Exception as exc:
+            print(f"provider_check: failed ({exc})", file=sys.stderr)
+            return 1
+        print(f"provider_check: ok ({get_provider_uri()})")
+        return 0
 
-    print(f"Cache directory: {CACHE_DIR}")
-    print()
+    print("prepare.py is the fixed harness. Run train.py to execute an experiment.", file=sys.stderr)
+    return 1
 
-    # Step 1: Download data
-    download_data(num_shards, download_workers=args.download_workers)
-    print()
 
-    # Step 2: Train tokenizer
-    train_tokenizer()
-    print()
-    print("Done! Ready to train.")
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -21,3 +21,11 @@ dev/
 
 # Results file
 results.tsv
+run.json
+run.log
+
+# Data
+data/
+
+# Local runtime artifacts
+tmp/
