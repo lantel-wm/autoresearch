@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="baseline_lgb_price_volume_turnover",
+        description="[label][docs] open_to_open_5d_aligned",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -31,7 +31,7 @@ def build_experiment() -> ExperimentSpec:
             ("Mean($turnover_rate, 5)", "turnover_rate_mean_5"),
             ("Std($turnover_rate, 20)", "turnover_rate_vol_20"),
         ],
-        label_expression="Ref($close, -5) / $close - 1",
+        label_expression="Ref($open, -6) / Ref($open, -1) - 1",
         model_type="lgbm",
         model_kwargs={
             "n_estimators": 300,
