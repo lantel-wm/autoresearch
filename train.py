@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][docs] open3d_top40_alpha158_core",
+        description="[factor][docs] open3d_top40_pricepos20",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -34,6 +34,9 @@ def build_experiment() -> ExperimentSpec:
             ("($high-Greater($open, $close))/($high-$low+1e-12)", "alpha_kup2"),
             ("(Less($open, $close)-$low)/($high-$low+1e-12)", "alpha_klow2"),
             ("(2*$close-$high-$low)/($high-$low+1e-12)", "alpha_ksft2"),
+            ("Rank($close, 20)", "alpha_rank20"),
+            ("Quantile($close, 20, 0.8)/$close", "alpha_qtlu20"),
+            ("Quantile($close, 20, 0.2)/$close", "alpha_qtld20"),
             ("($close-Min($low, 20))/(Max($high, 20)-Min($low, 20)+1e-12)", "alpha_rsv20"),
             ("Corr($close, Log($volume+1), 20)", "alpha_corr20"),
             ("Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)", "alpha_cord20"),
