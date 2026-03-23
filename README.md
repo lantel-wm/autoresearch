@@ -99,6 +99,12 @@ Useful variants:
 # Allow shell commands such as curl/pip/external APIs to use the network too
 ./scripts/run_codex_autoresearch.sh --allow-shell-network
 
+# Allow Codex to write .git after approval prompts
+./scripts/run_codex_autoresearch.sh --sandbox-mode danger-full-access --approval-policy on-request
+
+# Run unattended with full access
+./scripts/run_codex_autoresearch.sh --sandbox-mode danger-full-access --approval-policy never
+
 # Force a fresh first session instead of resuming the latest one
 ./scripts/run_codex_autoresearch.sh --fresh
 
@@ -109,6 +115,8 @@ Useful variants:
 Stop the outer loop with `Ctrl-C`. Each Codex invocation is expected to leave durable state in git, `results.tsv`, `run.json`, and `run.log`, so the next invocation can continue cleanly.
 
 The launcher uses `-c 'web_search="..."'` so it works cleanly with both `codex exec` and `codex exec resume`. On some Codex CLI versions, `--search` is a top-level flag rather than an `exec` subcommand flag, so the config form is the more stable choice for a supervisor script.
+
+By default the launcher uses `workspace-write` plus `approval_policy="on-request"`. That is the safe default, but `.git` remains protected in that sandbox. If you need Codex itself to perform git writes without hitting the protected-path sandbox, switch to `--sandbox-mode danger-full-access`. Keep `--approval-policy on-request` if you want prompts, or set `--approval-policy never` for unattended runs.
 
 If you still want to kick off a single interactive session manually, point it at `program.md`, but treat that as a one-step worker, not as the infinite loop itself.
 

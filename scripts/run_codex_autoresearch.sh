@@ -14,6 +14,10 @@ Options:
   --sleep SECONDS    Delay between invocations. Default: 2.
   --model MODEL      Optional Codex model override.
   --web-search MODE  One of: cached, live, disabled. Default: cached.
+  --sandbox-mode M   One of: read-only, workspace-write, danger-full-access.
+                     Default: workspace-write.
+  --approval-policy P
+                     One of: on-request, never, untrusted. Default: on-request.
   --allow-shell-network
                      Allow network access for shell commands in workspace-write mode.
   --fresh            Start with a fresh Codex session instead of resuming the latest one.
@@ -32,6 +36,8 @@ iterations=0
 sleep_seconds=2
 model=""
 web_search="cached"
+sandbox_mode="workspace-write"
+approval_policy="on-request"
 allow_shell_network=0
 start_mode="resume-or-fresh"
 dangerous=0
@@ -54,6 +60,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --web-search)
       web_search="$2"
+      shift 2
+      ;;
+    --sandbox-mode)
+      sandbox_mode="$2"
+      shift 2
+      ;;
+    --approval-policy)
+      approval_policy="$2"
       shift 2
       ;;
     --allow-shell-network)
@@ -93,6 +107,26 @@ case "$web_search" in
     ;;
   *)
     printf 'Invalid --web-search mode: %s\n' "$web_search" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+
+case "$sandbox_mode" in
+  read-only|workspace-write|danger-full-access)
+    ;;
+  *)
+    printf 'Invalid --sandbox-mode: %s\n' "$sandbox_mode" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+
+case "$approval_policy" in
+  on-request|never|untrusted)
+    ;;
+  *)
+    printf 'Invalid --approval-policy: %s\n' "$approval_policy" >&2
     usage >&2
     exit 1
     ;;
@@ -147,6 +181,8 @@ common_args=(
   --cd "$repo_root"
   --output-last-message "$output_dir/last_message.txt"
   -c "web_search=\"$web_search\""
+  --sandbox "$sandbox_mode"
+  -c "approval_policy=\"$approval_policy\""
 )
 if [[ -n "$model" ]]; then
   common_args+=(--model "$model")
@@ -156,8 +192,6 @@ if [[ "$allow_shell_network" -eq 1 ]]; then
 fi
 if [[ "$dangerous" -eq 1 ]]; then
   common_args+=(--dangerously-bypass-approvals-and-sandbox)
-else
-  common_args+=(--full-auto)
 fi
 
 run_step() {
