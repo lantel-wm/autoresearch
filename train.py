@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][docs] open3d_top40_alpha158_core10",
+        description="[factor][docs] open3d_top40_alpha158_core",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -34,27 +34,27 @@ def build_experiment() -> ExperimentSpec:
             ("($high-Greater($open, $close))/($high-$low+1e-12)", "alpha_kup2"),
             ("(Less($open, $close)-$low)/($high-$low+1e-12)", "alpha_klow2"),
             ("(2*$close-$high-$low)/($high-$low+1e-12)", "alpha_ksft2"),
-            ("($close-Min($low, 10))/(Max($high, 10)-Min($low, 10)+1e-12)", "alpha_rsv10"),
-            ("Corr($close, Log($volume+1), 10)", "alpha_corr10"),
-            ("Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 10)", "alpha_cord10"),
+            ("($close-Min($low, 20))/(Max($high, 20)-Min($low, 20)+1e-12)", "alpha_rsv20"),
+            ("Corr($close, Log($volume+1), 20)", "alpha_corr20"),
+            ("Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)", "alpha_cord20"),
             (
-                "Mean($close>Ref($close, 1), 10)-Mean($close<Ref($close, 1), 10)",
-                "alpha_cntd10",
+                "Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)",
+                "alpha_cntd20",
             ),
             (
-                "(Sum(Greater($close-Ref($close, 1), 0), 10)-Sum(Greater(Ref($close, 1)-$close, 0), 10))"
-                "/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)",
-                "alpha_sumd10",
+                "(Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close, 0), 20))"
+                "/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)",
+                "alpha_sumd20",
             ),
             (
-                "Std(Abs($close/Ref($close, 1)-1)*$volume, 10)"
-                "/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 10)+1e-12)",
-                "alpha_wvma10",
+                "Std(Abs($close/Ref($close, 1)-1)*$volume, 20)"
+                "/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 20)+1e-12)",
+                "alpha_wvma20",
             ),
             (
-                "(Sum(Greater($volume-Ref($volume, 1), 0), 10)-Sum(Greater(Ref($volume, 1)-$volume, 0), 10))"
-                "/(Sum(Abs($volume-Ref($volume, 1)), 10)+1e-12)",
-                "alpha_vsumd10",
+                "(Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume, 0), 20))"
+                "/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)",
+                "alpha_vsumd20",
             ),
         ],
         label_expression="Ref($open, -4) / Ref($open, -1) - 1",
