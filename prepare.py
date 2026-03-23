@@ -28,6 +28,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import qlib
+from qlib.config import DISK_DATASET_CACHE, DISK_EXPRESSION_CACHE
 from qlib.constant import REG_CN
 from qlib.data import D
 
@@ -150,7 +151,13 @@ def init_qlib(provider_uri: Path) -> None:
     provider_uri_str = str(provider_uri.resolve())
     if _QLIB_INITIALIZED_URI == provider_uri_str:
         return
-    qlib.init(provider_uri=provider_uri_str, region=REG_CN)
+    qlib.init(
+        provider_uri=provider_uri_str,
+        region=REG_CN,
+        expression_cache=DISK_EXPRESSION_CACHE,
+        dataset_cache=DISK_DATASET_CACHE,
+        default_disk_cache=1,
+    )
     _QLIB_INITIALIZED_URI = provider_uri_str
 
 
