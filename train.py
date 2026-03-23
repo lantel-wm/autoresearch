@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][docs] open3d_top40_vma_vstd",
+        description="[factor][docs] open3d_top40_alpha158_core",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -25,10 +25,6 @@ def build_experiment() -> ExperimentSpec:
             ("($high - $low) / $close", "range_pct"),
             ("Max($high, 5) / $close - 1", "high_breakout_5"),
             ("$close / Min($low, 5) - 1", "low_rebound_5"),
-            ("Mean($volume, 5) / ($volume + 1e-12)", "alpha_vma5"),
-            ("Mean($volume, 20) / ($volume + 1e-12)", "alpha_vma20"),
-            ("Std($volume, 5) / ($volume + 1e-12)", "alpha_vstd5"),
-            ("Std($volume, 20) / ($volume + 1e-12)", "alpha_vstd20"),
             ("Mean($volume, 5) / Mean($volume, 20) - 1", "volume_ratio_5_20"),
             ("Std($volume, 20) / Mean($volume, 20)", "volume_vol_20"),
             ("$turnover_rate", "turnover_rate"),
