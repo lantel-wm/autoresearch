@@ -70,7 +70,47 @@ conda run -n qlib python train.py
 
 ## Running the agent
 
-To launch `autoresearch` mode, start your coding agent in this repository and point it at `program.md`.
+Do not rely on a single long-lived Codex session to implement the research loop. In practice Codex will often decide a task is complete and stop after a few experiments, even if `program.md` says "never stop". The reliable fix is to move persistence out of the prompt and into an external supervisor loop.
+
+`program.md` now defines one complete experiment iteration per invocation. A shell loop or automation should resume or relaunch Codex for the next step.
+
+For web search, the recommended default is the Codex cached search index. Live search and shell-level network access are separate switches:
+
+- built-in web search: `cached` by default, optionally `live` or `disabled`
+- shell command network access: still off by default unless you enable it explicitly
+
+The recommended local launcher is:
+
+```bash
+./scripts/run_codex_autoresearch.sh --model gpt-5.4
+```
+
+If your shell cannot find `codex`, the launcher will also try the default macOS app-bundle path `/Applications/Codex.app/Contents/Resources/codex`. You can override discovery explicitly with `CODEX_BIN=/absolute/path/to/codex`.
+
+Useful variants:
+
+```bash
+# Run 5 supervised Codex invocations, then stop
+./scripts/run_codex_autoresearch.sh --iterations 5
+
+# Use live web search for the research passes
+./scripts/run_codex_autoresearch.sh --web-search live
+
+# Allow shell commands such as curl/pip/external APIs to use the network too
+./scripts/run_codex_autoresearch.sh --allow-shell-network
+
+# Force a fresh first session instead of resuming the latest one
+./scripts/run_codex_autoresearch.sh --fresh
+
+# Only if you are already inside an external sandbox and want zero approval friction
+./scripts/run_codex_autoresearch.sh --dangerous
+```
+
+Stop the outer loop with `Ctrl-C`. Each Codex invocation is expected to leave durable state in git, `results.tsv`, `run.json`, and `run.log`, so the next invocation can continue cleanly.
+
+The launcher uses `-c 'web_search="..."'` so it works cleanly with both `codex exec` and `codex exec resume`. On some Codex CLI versions, `--search` is a top-level flag rather than an `exec` subcommand flag, so the config form is the more stable choice for a supervisor script.
+
+If you still want to kick off a single interactive session manually, point it at `program.md`, but treat that as a one-step worker, not as the infinite loop itself.
 
 Example kickoff prompt:
 
@@ -89,9 +129,9 @@ The intended flow is:
 2. Let it read `README.md`, `program.md`, `prepare.py`, and `train.py`.
 3. Let it create a fresh `autoresearch/<tag>` branch.
 4. Let it run the baseline with output redirected to `run.log`.
-5. After baseline verification, let it continue the keep/discard loop defined in `program.md`.
+5. After baseline verification, let the external supervisor keep re-invoking the one-step loop defined in `program.md`.
 
-`program.md` is the operating manual for the autonomous loop. The agent should follow it rather than inventing its own workflow.
+`program.md` is the operating manual for each supervised iteration. The outer shell loop is what makes the overall process keep running.
 
 ## Research policy
 
