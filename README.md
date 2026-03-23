@@ -9,7 +9,7 @@ The original idea of the repo stays intact: give an AI agent a small but real re
 The repo is deliberately small and only has three files that matter:
 
 - `prepare.py` — the fixed Qlib harness. It validates the local provider, loads features from Qlib, runs the rolling-fold evaluation, backtests the signal, writes `run.json`, and decides `keep` vs `discard`.
-- `train.py` — the only file the agent edits. It defines the candidate experiment: feature expressions, label expression, LightGBM hyperparameters, and basic portfolio knobs.
+- `train.py` — the only file the agent edits. It defines the candidate experiment: mainly factor families and label expressions, with little smaller model and strategy follow-up tweaks.
 - `program.md` — the human-authored instruction file that tells the autonomous agent how to operate.
 
 The philosophy is the same as the original repo:
@@ -78,7 +78,9 @@ Example kickoff prompt:
 Read README.md and program.md, then set up a new autoresearch quant run.
 Use the local qlib conda env.
 Verify data/qlib_bin_daily_hfq, create a fresh autoresearch/<tag> branch,
-run the baseline, and then begin the experiment loop.
+run the baseline, then do factor-first and label-second research.
+Use web research according to program.md, avoid model/strategy grid search,
+and then begin the experiment loop.
 ```
 
 The intended flow is:
@@ -90,6 +92,40 @@ The intended flow is:
 5. After baseline verification, let it continue the keep/discard loop defined in `program.md`.
 
 `program.md` is the operating manual for the autonomous loop. The agent should follow it rather than inventing its own workflow.
+
+## Research policy
+
+The agent is expected to optimize in this order:
+
+- factors first
+- labels second
+- model config third
+- small strategy tweaks last
+
+In practice this means:
+
+- spend most experiments generating or reorganizing coherent factor families
+- use label design as the second major search direction
+
+Web research is part of the intended workflow:
+
+- do a research pass before the first non-baseline experiment
+- repeat it after 5 consecutive discards or every 10 total experiments
+- prioritize sources in this order:
+  1. [Qlib docs and examples](https://qlib.readthedocs.io/en/latest/)
+  2. [Microsoft Qlib / RD-Agent materials](https://github.com/microsoft/qlib)
+  3. papers on factor mining, label design, and backtest overfitting
+  4. broader web sources only as hypothesis generators
+
+Useful references for the agent’s research loop:
+
+- [Building Formulaic Alphas](https://qlib.readthedocs.io/en/latest/advanced/alpha.html)
+- [Qlib Strategy Docs / TopkDropoutStrategy](https://qlib.readthedocs.io/en/latest/component/strategy.html?highlight=TopkDropoutStrategy)
+- [R&D-Agent-Quant](https://www.microsoft.com/en-us/research/publication/rd-agent-quant-a-multi-agent-framework-for-data-centric-factors-and-model-joint-optimization/?lang=zh-cn)
+- [The Probability of Backtest Overfitting](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253)
+- [Taming the Factor Zoo](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2934020)
+
+If an experiment comes from external research, its description should begin with compact tags such as `[factor][paper]`, `[label][docs]`, `[model][issue]`, or `[strategy][web]`.
 
 ## Data contract
 
@@ -112,9 +148,11 @@ The intended flow is:
 
 Each candidate runs on three fixed rolling folds:
 
-1. train `2017-2021`, valid `2022`, test `2023`
-2. train `2018-2022`, valid `2023`, test `2024`
-3. train `2019-2023`, valid `2024`, test `2025`
+1. train `2015-2019`, valid `2020`, test `2021`
+2. train `2016-2020`, valid `2021`, test `2022`
+3. train `2017-2021`, valid `2022`, test `2023`
+4. train `2018-2022`, valid `2023`, test `2024`
+5. train `2019-2023`, valid `2024`, test `2025`
 
 The harness enforces:
 
