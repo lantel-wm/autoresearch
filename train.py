@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="baseline_lgb_price_volume_turnover",
+        description="[factor][docs] alpha158_trendpos20_baseline",
         feature_expressions=[
             ("$close / $open - 1", "intraday_return"),
             ("$open / Ref($close, 1) - 1", "gap_return"),
@@ -30,6 +30,37 @@ def build_experiment() -> ExperimentSpec:
             ("$turnover_rate", "turnover_rate"),
             ("Mean($turnover_rate, 5)", "turnover_rate_mean_5"),
             ("Std($turnover_rate, 20)", "turnover_rate_vol_20"),
+            ("($close-$open)/($high-$low+1e-12)", "alpha_kmid2"),
+            ("($high-Greater($open, $close))/($high-$low+1e-12)", "alpha_kup2"),
+            ("(Less($open, $close)-$low)/($high-$low+1e-12)", "alpha_klow2"),
+            ("(2*$close-$high-$low)/($high-$low+1e-12)", "alpha_ksft2"),
+            ("($close-Min($low, 20))/(Max($high, 20)-Min($low, 20)+1e-12)", "alpha_rsv20"),
+            ("Rsquare($close, 20)", "alpha_rsqr20"),
+            ("Resi($close, 20)/$close", "alpha_resi20"),
+            ("IdxMax($high, 20)/20", "alpha_imax20"),
+            ("IdxMin($low, 20)/20", "alpha_imin20"),
+            ("(IdxMax($high, 20)-IdxMin($low, 20))/20", "alpha_imxd20"),
+            ("Corr($close, Log($volume+1), 20)", "alpha_corr20"),
+            ("Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)", "alpha_cord20"),
+            (
+                "Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)",
+                "alpha_cntd20",
+            ),
+            (
+                "(Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close, 0), 20))"
+                "/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)",
+                "alpha_sumd20",
+            ),
+            (
+                "Std(Abs($close/Ref($close, 1)-1)*$volume, 20)"
+                "/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 20)+1e-12)",
+                "alpha_wvma20",
+            ),
+            (
+                "(Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume, 0), 20))"
+                "/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)",
+                "alpha_vsumd20",
+            ),
         ],
         label_expression="Ref($close, -5) / $close - 1",
         model_type="lgbm",
