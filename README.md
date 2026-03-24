@@ -70,10 +70,6 @@ conda run -n qlib python train.py
 
 ## Running the agent
 
-Do not rely on a single long-lived Codex session to implement the research loop. In practice Codex will often decide a task is complete and stop after a few experiments, even if `program.md` says "never stop". The reliable fix is to move persistence out of the prompt and into an external supervisor loop.
-
-`program.md` now defines one complete experiment iteration per invocation. A shell loop or automation should resume or relaunch Codex for the next step.
-
 For web search, the recommended default is the Codex cached search index. Live search and shell-level network access are separate switches:
 
 - built-in web search: `cached` by default, optionally `live` or `disabled`
@@ -90,7 +86,7 @@ If your shell cannot find `codex`, the launcher will also try the default macOS 
 Useful variants:
 
 ```bash
-# Run 5 supervised Codex invocations, then stop
+# Run 5 iterations, then stop
 ./scripts/run_codex_autoresearch.sh --iterations 5
 
 # Use live web search for the research passes
@@ -112,13 +108,59 @@ Useful variants:
 ./scripts/run_codex_autoresearch.sh --dangerous
 ```
 
-Stop the outer loop with `Ctrl-C`. Each Codex invocation is expected to leave durable state in git, `results.tsv`, `run.json`, and `run.log`, so the next invocation can continue cleanly.
+Stop the run with `Ctrl-C`. Progress is tracked in git, `results.tsv`, `run.json`, and `run.log`.
 
-The launcher uses `-c 'web_search="..."'` so it works cleanly with both `codex exec` and `codex exec resume`. On some Codex CLI versions, `--search` is a top-level flag rather than an `exec` subcommand flag, so the config form is the more stable choice for a supervisor script.
+The launcher uses `-c 'web_search="..."'` so it works cleanly with both `codex exec` and `codex exec resume`. On some Codex CLI versions, `--search` is a top-level flag rather than an `exec` subcommand flag, so the config form is the more stable choice for this launcher.
 
 By default the launcher uses `workspace-write` plus `approval_policy="on-request"`. That is the safe default, but `.git` remains protected in that sandbox. If you need Codex itself to perform git writes without hitting the protected-path sandbox, switch to `--sandbox-mode danger-full-access`. Keep `--approval-policy on-request` if you want prompts, or set `--approval-policy never` for unattended runs.
 
-If you still want to kick off a single interactive session manually, point it at `program.md`, but treat that as a one-step worker, not as the infinite loop itself.
+If you want to kick off a single interactive session manually, point it at `program.md`.
+
+## Containerized Full Access
+
+For local macOS use, the cleanest high-permission setup is to run Codex inside a Docker container that mounts only this experiment repo. That keeps `danger-full-access` or `--dangerously-bypass-approvals-and-sandbox` scoped to the mounted worktree instead of your full host filesystem.
+
+This repo includes:
+
+- [docker/codex-autoresearch.Dockerfile](/Users/zhaozhiyu/Projects/autoresearch/docker/codex-autoresearch.Dockerfile) — Ubuntu + Miniforge + `qlib` env + Codex CLI
+- [scripts/run_codex_autoresearch_docker.sh](/Users/zhaozhiyu/Projects/autoresearch/scripts/run_codex_autoresearch_docker.sh) — repo-scoped `docker run` wrapper
+
+Build the image:
+
+```bash
+./scripts/run_codex_autoresearch_docker.sh --build-only
+docker build -f docker/codex-autoresearch.Dockerfile -t autoresearch-codex:latest docker
+```
+
+Recommended unattended container run:
+
+```bash
+./scripts/run_codex_autoresearch_docker.sh --build -- \
+  --model gpt-5.4 \
+  --web-search live \
+  --sandbox-mode danger-full-access \
+  --approval-policy never
+```
+
+If you want prompts inside the container instead of unattended full access:
+
+```bash
+./scripts/run_codex_autoresearch_docker.sh -- \
+  --model gpt-5.4 \
+  --web-search live \
+  --sandbox-mode danger-full-access \
+  --approval-policy on-request
+```
+
+The Docker wrapper mounts only this repository into `/workspace` by default. It also mounts `~/.codex` if present so the containerized Codex CLI can reuse your local login cache. For headless/container flows, Codex authentication docs recommend file-based auth cache reuse and note that `~/.codex/auth.json` contains access tokens, so treat it like a password and do not commit it.
+
+If your host Codex login is currently stored in the macOS keychain rather than in `~/.codex/auth.json`, switch to file-based credential storage before using the container:
+
+```toml
+cli_auth_credentials_store = "file"
+```
+
+Then run `codex login` on the host once and mount `~/.codex` into the container.
 
 Example kickoff prompt:
 
@@ -137,9 +179,9 @@ The intended flow is:
 2. Let it read `README.md`, `program.md`, `prepare.py`, and `train.py`.
 3. Let it create a fresh `autoresearch/<tag>` branch.
 4. Let it run the baseline with output redirected to `run.log`.
-5. After baseline verification, let the external supervisor keep re-invoking the one-step loop defined in `program.md`.
+5. After baseline verification, let it continue the experiment loop defined in `program.md`.
 
-`program.md` is the operating manual for each supervised iteration. The outer shell loop is what makes the overall process keep running.
+`program.md` is the operating manual for the experiment loop. The agent should follow it rather than inventing its own workflow.
 
 ## Research policy
 

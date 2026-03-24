@@ -110,17 +110,11 @@ commit	sharpe	rank_ic	turnover	max_drawdown	status	description
 
 If the idea is externally inspired, begin the description with compact evidence tags such as `[factor][paper]` or `[label][docs]`. Keep descriptions short and TSV-safe.
 
-## Supervisor contract
+## The experiment loop
 
 The experiment runs on a dedicated branch such as `autoresearch/mar23`.
 
-Do not rely on a single Codex chat session to live forever. The reliable pattern is:
-
-- an external supervisor script or automation re-invokes Codex
-- each Codex invocation completes exactly one experiment iteration
-- git state, `results.tsv`, `run.json`, and `run.log` carry the durable loop state
-
-Per invocation, do exactly this:
+Repeat this cycle:
 
 1. Look at the git state and current kept baseline.
 2. If the Web Research Policy requires it and built-in web search is enabled in the current Codex mode, do a short research pass and extract 1-3 testable hypotheses.
@@ -139,7 +133,7 @@ Per invocation, do exactly this:
 8. If `status: keep`, keep the commit and advance the branch.
 9. If `status: discard`, revert to the previous kept commit.
 10. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
-11. Stop after the repository is back in a clean state that is ready for the next supervised invocation.
+11. Move on to the next experiment from the resulting clean state.
 
 ## Decision rule
 
@@ -159,10 +153,6 @@ All else equal, prefer smaller diffs. A tiny gain from a complicated hack is not
 - If the provider is missing, stop and tell the human exactly what path is expected.
 - If the idea crashes for a trivial reason, fix and rerun once. If it is fundamentally broken, discard it.
 
-## Persistence
+## Continuation
 
-The research process should keep going until the human interrupts it, but that persistence belongs to the supervisor, not to a single model session.
-
-- If you are running under a supervisor, complete one iteration and exit cleanly.
-- If a human is manually driving an interactive session and explicitly asks for another immediate iteration, you may continue.
-- Do not treat "never stop" as a reason to end a turn in a half-finished state. Finish one iteration, leave durable state on disk, and let the next invocation continue from there.
+Once the loop begins, keep iterating until the human interrupts you.
