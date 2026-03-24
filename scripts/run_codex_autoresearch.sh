@@ -177,7 +177,7 @@ Do not stop before either finishing one completed iteration or reporting a concr
 EOF
 }
 
-common_args=(
+common_args_fresh=(
   --cd "$repo_root"
   --output-last-message "$output_dir/last_message.txt"
   --disable codex_hooks
@@ -185,14 +185,23 @@ common_args=(
   --sandbox "$sandbox_mode"
   -c "approval_policy=\"$approval_policy\""
 )
+common_args_resume=(
+  --output-last-message "$output_dir/last_message.txt"
+  --disable codex_hooks
+  -c "web_search=\"$web_search\""
+  -c "approval_policy=\"$approval_policy\""
+)
 if [[ -n "$model" ]]; then
-  common_args+=(--model "$model")
+  common_args_fresh+=(--model "$model")
+  common_args_resume+=(--model "$model")
 fi
 if [[ "$allow_shell_network" -eq 1 ]]; then
-  common_args+=(-c 'sandbox_workspace_write.network_access=true')
+  common_args_fresh+=(-c 'sandbox_workspace_write.network_access=true')
+  common_args_resume+=(-c 'sandbox_workspace_write.network_access=true')
 fi
 if [[ "$dangerous" -eq 1 ]]; then
-  common_args+=(--dangerously-bypass-approvals-and-sandbox)
+  common_args_fresh+=(--dangerously-bypass-approvals-and-sandbox)
+  common_args_resume+=(--dangerously-bypass-approvals-and-sandbox)
 fi
 
 run_step() {
@@ -211,17 +220,19 @@ run_step() {
   fi
 
   if [[ "$try_resume" -eq 1 ]]; then
-    if "$codex_bin" exec resume --last "${common_args[@]}" "$prompt"; then
+    local resume_rc
+    if "$codex_bin" exec resume --last "${common_args_resume[@]}" "$prompt"; then
       return 0
+    else
+      resume_rc=$?
     fi
-    local resume_rc=$?
     if [[ "$start_mode" == "resume-only" ]]; then
       return "$resume_rc"
     fi
     printf 'Resume failed for step %s (exit %s). Starting a fresh Codex session.\n' "$step" "$resume_rc" >&2
   fi
 
-  "$codex_bin" exec "${common_args[@]}" "$prompt"
+  "$codex_bin" exec "${common_args_fresh[@]}" "$prompt"
 }
 
 step=1
