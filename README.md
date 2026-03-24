@@ -70,6 +70,16 @@ conda run -n qlib python train.py
 
 ## Running the agent
 
+If you are on a recent Codex release with hooks support, this repo now includes repo-local Codex hooks under [.codex/config.toml](/Users/zhaozhiyu/Projects/autoresearch/.codex/config.toml) and [.codex/hooks.json](/Users/zhaozhiyu/Projects/autoresearch/.codex/hooks.json). The `SessionStart` hook injects the current branch/run state, and the `Stop` hook blocks natural stopping and tells Codex to continue the next autoresearch step.
+
+The simplest hook-based workflow is:
+
+1. Start Codex from this repo root.
+2. Give it the normal autoresearch kickoff prompt.
+3. Let the repo-local hooks keep the experiment loop moving.
+
+If you want the current session to stop normally, create `.codex/allow_stop` in the repo root or start Codex with `AUTORESEARCH_ALLOW_STOP=1`. Remove `.codex/allow_stop` afterwards to re-enable the forever-loop behavior.
+
 For web search, the recommended default is the Codex cached search index. Live search and shell-level network access are separate switches:
 
 - built-in web search: `cached` by default, optionally `live` or `disabled`
@@ -115,6 +125,8 @@ The launcher uses `-c 'web_search="..."'` so it works cleanly with both `codex e
 By default the launcher uses `workspace-write` plus `approval_policy="on-request"`. That is the safe default, but `.git` remains protected in that sandbox. If you need Codex itself to perform git writes without hitting the protected-path sandbox, switch to `--sandbox-mode danger-full-access`. Keep `--approval-policy on-request` if you want prompts, or set `--approval-policy never` for unattended runs.
 
 If you want to kick off a single interactive session manually, point it at `program.md`.
+
+The launcher scripts explicitly disable repo-local hooks with `--disable codex_hooks`, because they already implement their own run-loop behavior. Use a normal Codex session from the repo root if you want the new hook-based forever loop.
 
 ## Containerized Full Access
 

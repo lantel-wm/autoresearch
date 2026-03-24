@@ -1,0 +1,5 @@
+[features]
+codex_hooks = true
+
+[projects."/Users/zhaozhiyu/Projects/autoresearch"]
+trust_level = "trusted"

@@ -180,6 +180,7 @@ EOF
 common_args=(
   --cd "$repo_root"
   --output-last-message "$output_dir/last_message.txt"
+  --disable codex_hooks
   -c "web_search=\"$web_search\""
   --sandbox "$sandbox_mode"
   -c "approval_policy=\"$approval_policy\""

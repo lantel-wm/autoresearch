@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/autoresearch_session_start.py",
+            "timeoutSec": 10,
+            "statusMessage": "loading autoresearch context"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/autoresearch_stop.py",
+            "timeoutSec": 10,
+            "statusMessage": "continuing autoresearch loop"
+          }
+        ]
+      }
+    ]
+  }
+}
