@@ -432,6 +432,18 @@ def compute_max_drawdown(returns: pd.Series) -> float:
     return float(abs(drawdown.min()))
 
 
+def fold_recency_weights(folds: list[FoldMetrics]) -> np.ndarray:
+    # Later rolling test years get higher weight than older ones.
+    return np.arange(1, len(folds) + 1, dtype=float)
+
+
+def recency_weighted_mean(values: list[float], folds: list[FoldMetrics]) -> float:
+    if not folds:
+        return 0.0
+    weights = fold_recency_weights(folds)
+    return float(np.average(values, weights=weights))
+
+
 def aggregate_summary(
     *,
     spec: ExperimentSpec,
@@ -444,11 +456,11 @@ def aggregate_summary(
         commit=current_commit_hash(),
         description=spec.description,
         status=status,
-        mean_sharpe=float(np.mean([fold.sharpe for fold in folds])) if folds else 0.0,
-        mean_rank_ic=float(np.mean([fold.rank_ic for fold in folds])) if folds else 0.0,
-        mean_turnover=float(np.mean([fold.turnover for fold in folds])) if folds else 0.0,
-        mean_max_drawdown=float(np.mean([fold.max_drawdown for fold in folds])) if folds else 0.0,
-        mean_annual_return=float(np.mean([fold.annual_return for fold in folds])) if folds else 0.0,
+        mean_sharpe=recency_weighted_mean([fold.sharpe for fold in folds], folds),
+        mean_rank_ic=recency_weighted_mean([fold.rank_ic for fold in folds], folds),
+        mean_turnover=recency_weighted_mean([fold.turnover for fold in folds], folds),
+        mean_max_drawdown=recency_weighted_mean([fold.max_drawdown for fold in folds], folds),
+        mean_annual_return=recency_weighted_mean([fold.annual_return for fold in folds], folds),
         runtime_seconds=runtime_seconds,
         provider_uri=str(get_provider_uri()),
         market=DEFAULT_MARKET,
