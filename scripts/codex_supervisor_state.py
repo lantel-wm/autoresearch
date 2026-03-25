@@ -6,7 +6,6 @@ import argparse
 import csv
 import json
 import subprocess
-from collections import Counter
 from pathlib import Path
 
 
@@ -144,38 +143,6 @@ def save_history(repo_root: Path, history: dict) -> None:
     path.write_text(json.dumps(history, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def valid_window(history: dict) -> list[dict]:
-    valid_entries = [
-        entry
-        for entry in history["entries"]
-        if entry.get("valid") and entry.get("category") in {"factor", "label", "model", "strategy"}
-    ]
-    return valid_entries[-9:]
-
-
-def required_category(history: dict) -> dict:
-    window = valid_window(history)
-    counts = Counter(entry["category"] for entry in window)
-    remaining_after_this = 10 - (len(window) + 1)
-
-    if counts["factor"] + remaining_after_this < 6:
-        required = "factor"
-        reason = "factor_quota"
-    elif counts["label"] + remaining_after_this < 2:
-        required = "label"
-        reason = "label_quota"
-    else:
-        required = "factor"
-        reason = "default_factor"
-
-    return {
-        "required_category": required,
-        "reason": reason,
-        "window_size": len(window),
-        "counts": dict(counts),
-    }
-
-
 def restore_train(repo_root: Path, keep_commit: str) -> bool:
     current = (repo_root / "train.py").read_text(encoding="utf-8")
     keep_content = git(repo_root, "show", f"{keep_commit}:train.py")
@@ -233,12 +200,7 @@ def cmd_preflight(repo_root: Path) -> None:
     )
 
 
-def cmd_required_category(repo_root: Path) -> None:
-    history = load_or_bootstrap_history(repo_root)
-    print(json.dumps(required_category(history)))
-
-
-def cmd_record_result(repo_root: Path, required: str) -> None:
+def cmd_record_result(repo_root: Path, required: str | None) -> None:
     history = load_or_bootstrap_history(repo_root)
     results_path = repo_root / "results.tsv"
     rows = load_results(results_path)
@@ -247,20 +209,22 @@ def cmd_record_result(repo_root: Path, required: str) -> None:
 
     latest = rows[-1]
     category = classify_experiment(repo_root, latest["description"], latest["commit"])
-    valid = latest["status"] != "crash" and category == required
+    valid = latest["status"] != "crash" and category in {"factor", "label", "model", "strategy"}
     entry = {
         "commit": latest["commit"],
         "description": latest["description"],
         "status": latest["status"],
         "category": category,
-        "required_category": required,
         "valid": valid,
         "valid_reason": (
             "ok"
             if valid
-            else ("crash" if latest["status"] == "crash" else "invalid_category")
+            else ("crash" if latest["status"] == "crash" else "unknown_category")
         ),
     }
+
+    if required is not None:
+        entry["required_category"] = required
 
     if not valid and latest["status"] == "keep":
         rewrite_latest_result_status(results_path, latest["commit"], "discard")
@@ -278,7 +242,7 @@ def cmd_record_result(repo_root: Path, required: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="State helpers for autoresearch supervisor.")
-    parser.add_argument("command", choices=["preflight", "required-category", "record-result"])
+    parser.add_argument("command", choices=["preflight", "record-result"])
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--required-category")
     args = parser.parse_args()
@@ -288,12 +252,7 @@ def main() -> int:
     if args.command == "preflight":
         cmd_preflight(repo_root)
         return 0
-    if args.command == "required-category":
-        cmd_required_category(repo_root)
-        return 0
     if args.command == "record-result":
-        if not args.required_category:
-            raise SystemExit("--required-category is required for record-result")
         cmd_record_result(repo_root, args.required_category)
         return 0
     return 1

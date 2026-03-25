@@ -70,28 +70,15 @@ conda run -n qlib python train.py
 
 ## Running the agent
 
-If you are on a recent Codex release with hooks support, this repo now includes repo-local Codex hooks under [.codex/config.toml](/Users/zhaozhiyu/Projects/autoresearch/.codex/config.toml) and [.codex/hooks.json](/Users/zhaozhiyu/Projects/autoresearch/.codex/hooks.json). The `SessionStart` hook injects the current branch/run state, and the `Stop` hook blocks natural stopping and tells Codex to continue the next autoresearch step.
-
-The simplest hook-based workflow is:
-
-1. Start Codex from this repo root.
-2. Give it the normal autoresearch kickoff prompt.
-3. Let the repo-local hooks keep the experiment loop moving.
-
-If you want the current session to stop normally, create `.codex/allow_stop` in the repo root or start Codex with `AUTORESEARCH_ALLOW_STOP=1`. Remove `.codex/allow_stop` afterwards to re-enable the forever-loop behavior.
-
-For web search, the recommended default is the Codex cached search index. Live search and shell-level network access are separate switches:
-
-- built-in web search: `cached` by default, optionally `live` or `disabled`
-- shell command network access: still off by default unless you enable it explicitly
-
-The recommended local launcher is:
+For Codex, the recommended path is the external supervisor launcher:
 
 ```bash
 ./scripts/run_codex_autoresearch.sh --model gpt-5.4
 ```
 
-If your shell cannot find `codex`, the launcher will also try the default macOS app-bundle path `/Applications/Codex.app/Contents/Resources/codex`. You can override discovery explicitly with `CODEX_BIN=/absolute/path/to/codex`.
+This is the practical workaround for the limitation discussed in [karpathy/autoresearch issue #57](https://github.com/karpathy/autoresearch/issues/57): interactive Codex sessions do not reliably obey "never stop" instructions, and some Desktop / VS Code sourced sessions do not appear to fire repo-local `Stop` hooks at all.
+
+The supervisor loop does not depend on interactive never-stop behavior. It runs one full experiment iteration per Codex invocation, then resumes the latest session for the next step. That makes the loop reliable even when interactive stop blocking is not.
 
 Useful variants:
 
@@ -118,15 +105,38 @@ Useful variants:
 ./scripts/run_codex_autoresearch.sh --dangerous
 ```
 
-Stop the run with `Ctrl-C`. Progress is tracked in git, `results.tsv`, `run.json`, and `run.log`.
+To pause the external supervisor cleanly, create `.codex/pause_supervisor` in the repo root. The current Codex step will finish, and the shell loop will stop before launching the next one. Remove `.codex/pause_supervisor` and rerun the launcher to continue.
+
+If your shell cannot find `codex`, the launcher will also try the default macOS app-bundle path `/Applications/Codex.app/Contents/Resources/codex`. You can override discovery explicitly with `CODEX_BIN=/absolute/path/to/codex`.
+
+Stop the run immediately with `Ctrl-C`. Progress is tracked in git, `results.tsv`, `run.json`, and `run.log`.
 
 The launcher uses `-c 'web_search="..."'` so it works cleanly with both `codex exec` and `codex exec resume`. On some Codex CLI versions, `--search` is a top-level flag rather than an `exec` subcommand flag, so the config form is the more stable choice for this launcher.
 
 By default the launcher uses `workspace-write` plus `approval_policy="on-request"`. That is the safe default, but `.git` remains protected in that sandbox. If you need Codex itself to perform git writes without hitting the protected-path sandbox, switch to `--sandbox-mode danger-full-access`. Keep `--approval-policy on-request` if you want prompts, or set `--approval-policy never` for unattended runs.
 
-If you want to kick off a single interactive session manually, point it at `program.md`.
+The launcher scripts explicitly disable repo-local hooks with `--disable codex_hooks`, because they already implement their own run-loop behavior.
 
-The launcher scripts explicitly disable repo-local hooks with `--disable codex_hooks`, because they already implement their own run-loop behavior. Use a normal Codex session from the repo root if you want the new hook-based forever loop.
+The current supervisor only enforces state hygiene and result recording. It does not force a factor/label/model/strategy category. The Codex run chooses the next experiment direction itself from the repository state and recent results.
+
+If you are on a recent Codex release with hooks support, this repo also includes repo-local Codex hooks under [.codex/config.toml](/Users/zhaozhiyu/Projects/autoresearch/.codex/config.toml) and [.codex/hooks.json](/Users/zhaozhiyu/Projects/autoresearch/.codex/hooks.json). The `SessionStart` hook injects the current branch/run state, and the `Stop` hook attempts to block natural stopping and tell Codex to continue the next autoresearch step.
+
+The simplest hook-based workflow is:
+
+1. Start Codex from this repo root.
+2. Give it the normal autoresearch kickoff prompt.
+3. Let the repo-local hooks keep the experiment loop moving.
+
+Treat the hook path as best-effort only. Use it only for plain interactive Codex sessions launched directly from the repo root, and do not assume it will work in every Desktop or VS Code session source.
+
+If you want the current hook-driven session to stop normally, create `.codex/allow_stop` in the repo root or start Codex with `AUTORESEARCH_ALLOW_STOP=1`. Remove `.codex/allow_stop` afterwards to re-enable the forever-loop behavior.
+
+For web search, the recommended default is the Codex cached search index. Live search and shell-level network access are separate switches:
+
+- built-in web search: `cached` by default, optionally `live` or `disabled`
+- shell command network access: still off by default unless you enable it explicitly
+
+If you want to kick off a single interactive session manually, point it at `program.md`.
 
 ## Containerized Full Access
 
@@ -209,15 +219,12 @@ In practice this means:
 - spend most experiments generating or reorganizing coherent factor families
 - use label design as the second major search direction
 
-Web research is part of the intended workflow:
+Web research is part of the intended workflow, but the agent now decides when it is worth doing. When search is available, the intended scope is broad:
 
-- do a research pass before the first non-baseline experiment
-- repeat it after 5 consecutive discards or every 10 total experiments
-- prioritize sources in this order:
-  1. [Qlib docs and examples](https://qlib.readthedocs.io/en/latest/)
-  2. [Microsoft Qlib / RD-Agent materials](https://github.com/microsoft/qlib)
-  3. papers on factor mining, label design, and backtest overfitting
-  4. broader web sources only as hypothesis generators
+- [Qlib docs and examples](https://qlib.readthedocs.io/en/latest/)
+- [Microsoft Qlib / RD-Agent materials](https://github.com/microsoft/qlib)
+- papers on factor mining, label design, overnight/intraday effects, liquidity, volatility, and A-share anomalies
+- broader A-share factor sources, practitioner posts, and sell-side notes as hypothesis generators
 
 Useful references for the agent’s research loop:
 

@@ -8,6 +8,7 @@ Usage: scripts/run_codex_autoresearch.sh [options]
 
 Run Codex under an external supervisor loop so each invocation completes
 exactly one autoresearch iteration and the shell loop provides persistence.
+This is the reliable Codex workaround for interactive never-stop limitations.
 
 Options:
   --iterations N     Number of Codex invocations to run. Default: 0 (infinite).
@@ -22,6 +23,8 @@ Options:
                      Allow network access for shell commands in workspace-write mode.
   --fresh            Start with a fresh Codex session instead of resuming the latest one.
   --resume-only      Only resume the latest session. Fail if no resumable session exists.
+  --pause-file PATH  Sentinel file that pauses the supervisor before the next step.
+                     Default: .codex/pause_supervisor
   --dangerous        Pass --dangerously-bypass-approvals-and-sandbox to Codex.
   --extra-prompt TXT Append one extra instruction to every Codex invocation.
   -h, --help         Show this help message.
@@ -84,6 +87,10 @@ while [[ $# -gt 0 ]]; do
     --resume-only)
       start_mode="resume-only"
       shift
+      ;;
+    --pause-file)
+      pause_file="$2"
+      shift 2
       ;;
     --dangerous)
       dangerous=1
@@ -183,11 +190,7 @@ run_preflight() {
   fi
 }
 
-required_category_payload() {
-  python3 "$state_helper" required-category --repo-root "$repo_root"
-}
 build_prompt() {
-  local required_category="$1"
   cat <<'EOF'
 You are operating this repository under an external supervisor.
 Read README.md and program.md as needed, but treat them as durable policy and state,
@@ -212,15 +215,6 @@ Complete exactly one full autoresearch iteration:
 Do not ask whether to continue. The supervisor will launch the next step.
 Do not stop before either finishing one completed iteration or reporting a concrete blocker.
 EOF
-  printf '\nThis step MUST be a %s experiment.\n' "$required_category"
-  case "$required_category" in
-    factor)
-      printf 'Do not run a label, model, or strategy experiment in this step.\n'
-      ;;
-    label)
-      printf 'Do not run a factor, model, or strategy experiment in this step.\n'
-      ;;
-  esac
 }
 
 common_args_fresh=(
@@ -252,9 +246,8 @@ fi
 
 run_step() {
   local step="$1"
-  local required_category="$2"
   local prompt
-  prompt="$(build_prompt "$required_category")"
+  prompt="$(build_prompt)"
   if [[ -n "$extra_prompt" ]]; then
     prompt+=$'\n\nAdditional instruction:\n'"$extra_prompt"
   fi
@@ -283,21 +276,18 @@ run_step() {
 }
 
 record_step_result() {
-  local required_category="$1"
   local payload
-  payload="$(python3 "$state_helper" record-result --repo-root "$repo_root" --required-category "$required_category")"
-  local valid commit status category
-  valid="$(json_field "$payload" "valid")"
+  payload="$(python3 "$state_helper" record-result --repo-root "$repo_root")"
+  local valid_reason commit status category
+  valid_reason="$(json_field "$payload" "valid_reason")"
   commit="$(json_field "$payload" "commit")"
   status="$(json_field "$payload" "status")"
   category="$(json_field "$payload" "category")"
-  if [[ "$valid" != "True" && "$valid" != "true" ]]; then
-    printf '[%s] invalid experiment category: expected %s, got %s (%s)\n' \
-      "$(date '+%Y-%m-%d %H:%M:%S')" "$required_category" "$category" "$commit" >&2
-    if [[ "$status" == "keep" ]]; then
-      git revert --no-edit "$commit"
-      printf '[%s] reverted invalid keep candidate %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$commit" >&2
-    fi
+  printf '[%s] recorded %s experiment result: %s (%s)\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$category" "$status" "$commit"
+  if [[ "$valid_reason" == "unknown_category" && "$status" == "keep" ]]; then
+    git revert --no-edit "$commit"
+    printf '[%s] reverted unsupported keep candidate %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$commit" >&2
   fi
 }
 
@@ -311,15 +301,13 @@ while :; do
       "$(date '+%Y-%m-%d %H:%M:%S')" "$current_pause_file" "$step"
     exit 0
   fi
+
   if [[ "$iterations" -gt 0 && "$step" -gt "$iterations" ]]; then
     break
   fi
 
-  required_payload="$(required_category_payload)"
-  required_category="$(json_field "$required_payload" "required_category")"
   printf '\n[%s] starting Codex step %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$step"
-  printf '[%s] required experiment category: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$required_category"
-  if run_step "$step" "$required_category"; then
+  if run_step "$step"; then
     printf '[%s] step %s completed\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$step"
   else
     rc=$?
@@ -327,7 +315,7 @@ while :; do
     exit "$rc"
   fi
 
-  record_step_result "$required_category"
+  record_step_result
 
   if [[ -f "$output_dir/last_message.txt" ]]; then
     cp "$output_dir/last_message.txt" "$output_dir/step_$(printf '%04d' "$step").txt"

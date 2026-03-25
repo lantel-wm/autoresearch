@@ -23,7 +23,7 @@ Each experiment runs in the local `qlib` conda environment. The fixed harness in
 
 **What you CAN do:**
 - Modify `train.py` only.
-- Search in this priority order: factors, then labels, then model config, then small strategy tweaks.
+- Choose the next experiment direction adaptively from factors, labels, model config, and small strategy tweaks.
 - Use web research to source factor ideas, label ideas, and implementation clues, following the Web Research Policy below.
 - Change factor expressions, realistic label variants, model hyperparameters, and small strategy knobs inside `train.py`, but keep the current harness interface unchanged.
 
@@ -46,20 +46,19 @@ Each experiment runs in the local `qlib` conda environment. The fixed harness in
 ## Research Priority
 
 - The default search order is: `factors > labels > model config > small strategy tweaks`.
-- In any rolling block of 10 experiments, target at least 6 factor-focused experiments, at least 2 label-focused experiments, at most 1 model-only experiment, and at most 1 strategy-tweak experiment.
+- Treat that order as a prior, not a hard quota. You may shift direction when recent results imply the current search lane is saturated or when another lane has a clearer hypothesis.
 - A factor-focused experiment must add, replace, or reorganize a coherent factor family or feature interaction set. Do not count a single random extra column as factor research.
 - Model-only and strategy-only experiments are allowed only as small follow-up checks after stronger factor or label ideas, not as the main search path.
 
 ## Web Research Policy
 
-- Perform a research pass before the first non-baseline experiment.
-- Perform another research pass after every 5 consecutive discards or every 10 total experiments, whichever comes first.
-- Use sources in this priority order:
+- If built-in web search is available, decide for yourself when a research pass is worth doing. Triggers include the first non-baseline experiment, search stagnation, repeated discards, or uncertainty about the next direction.
+- Search scope is not limited to Qlib. You may use any relevant A-share factor source you can find, including:
   1. Official Qlib docs/examples and Microsoft Qlib or RD-Agent material.
-  2. Papers and working papers on factor mining, label design, and backtest overfitting.
-  3. Qlib GitHub examples/issues for implementation clarifications.
-  4. Broader web sources only as hypothesis generators.
-- Treat docs, papers, and Qlib implementation references as evidence. Treat broader web content as tentative until validated locally by the fixed harness.
+  2. Papers and working papers on A-share factors, overnight/intraday effects, liquidity, volatility, and label design.
+  3. Qlib GitHub examples/issues and broader quant implementation references.
+  4. Sell-side, practitioner, forum, and blog discussions on A-share factor ideas, treated as hypothesis generators rather than evidence.
+- Treat docs, papers, and implementation references as stronger evidence. Treat broader web content as tentative until validated locally by the fixed harness.
 - If an experiment is externally inspired, start its description with compact tags such as `[factor][paper]`, `[label][docs]`, `[model][issue]`, or `[strategy][web]`.
 
 ## Label Policy
@@ -71,7 +70,7 @@ Each experiment runs in the local `qlib` conda environment. The fixed harness in
 
 ## Overfitting Guardrails
 
-- Prefer new factor families, feature interactions, and label designs over hyperparameter tuning.
+- Prefer new factor families, feature interactions, and label designs over hyperparameter tuning, but choose the lane that currently has the clearest next hypothesis.
 - Do not run back-to-back model-only experiments or back-to-back strategy-only experiments.
 - Do not run local sweeps on `learning_rate`, `num_leaves`, `n_estimators`, `topk`, `n_drop`, or cost settings unless the immediately preceding kept result came from a new factor or label idea and there is a specific follow-up hypothesis.
 - Keep the current TopkDropout family as the anchor. Limit strategy variation to rare local tweaks around `topk`, `n_drop`, and cost sanity checks.
@@ -117,7 +116,7 @@ The experiment runs on a dedicated branch such as `autoresearch/mar23`.
 Repeat this cycle:
 
 1. Look at the git state and current kept baseline.
-2. If the Web Research Policy requires it and built-in web search is enabled in the current Codex mode, do a short research pass and extract 1-3 testable hypotheses.
+2. If built-in web search is enabled and you judge that outside research would materially improve the next choice, do a short research pass and extract 1-3 testable hypotheses.
 3. If built-in web search is disabled in the current Codex mode, note that limitation briefly and continue with the best local hypothesis from the existing repo state.
 4. Modify `train.py` with one experiment idea that follows the Research Priority and Overfitting Guardrails.
 5. Commit the change.
