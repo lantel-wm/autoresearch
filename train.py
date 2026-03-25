@@ -12,26 +12,61 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="baseline_lgb_price_volume_turnover",
+        description="[strategy][local] overnight_gap_top44_drop3",
         feature_expressions=[
-            ("$close / $open - 1", "intraday_return"),
-            ("$open / Ref($close, 1) - 1", "gap_return"),
-            ("$close / Ref($close, 1) - 1", "close_return_1"),
-            ("$close / Ref($close, 5) - 1", "close_return_5"),
-            ("Mean($close, 5) / $close - 1", "ma_gap_5"),
-            ("Mean($close, 20) / $close - 1", "ma_gap_20"),
-            ("Std($close, 5) / $close", "close_vol_5"),
-            ("Std($close, 20) / $close", "close_vol_20"),
-            ("($high - $low) / $close", "range_pct"),
-            ("Max($high, 5) / $close - 1", "high_breakout_5"),
-            ("$close / Min($low, 5) - 1", "low_rebound_5"),
-            ("Mean($volume, 5) / Mean($volume, 20) - 1", "volume_ratio_5_20"),
-            ("Std($volume, 20) / Mean($volume, 20)", "volume_vol_20"),
+            ("($close - $open) / $open", "kmid"),
+            ("($high - $low) / $open", "klen"),
+            ("($high - Greater($open, $close)) / ($high - $low + 1e-12)", "kup2"),
+            ("(Less($open, $close) - $low) / ($high - $low + 1e-12)", "klow2"),
+            ("(2 * $close - $high - $low) / ($high - $low + 1e-12)", "ksft2"),
+            ("$open / Ref($close, 1) - 1", "gap1"),
+            ("Mean($open / Ref($close, 1) - 1, 5)", "gap_mean5"),
+            ("Std($open / Ref($close, 1) - 1, 20)", "gap_std20"),
+            ("Rank($open / Ref($close, 1) - 1, 20)", "gap_rank20"),
+            ("Mean((($close - $open) / $open) - ($open / Ref($close, 1) - 1), 5)", "gap_reversal5"),
+            (
+                "($open / Ref($close, 1) - 1) / (Mean(Abs($open / Ref($close, 1) - 1), 20) + 1e-12)",
+                "gap_shock20",
+            ),
+            (
+                "Sum($open / Ref($close, 1) - 1, 20) / (Sum(Abs($open / Ref($close, 1) - 1), 20) + 1e-12)",
+                "gap_sumd20",
+            ),
+            (
+                "Mean($open / Ref($close, 1) - 1 > 0, 20) - Mean($open / Ref($close, 1) - 1 < 0, 20)",
+                "gap_streak20",
+            ),
+            (
+                "Mean(($open / Ref($close, 1) - 1) - Ref($open / Ref($close, 1) - 1, 1), 5)",
+                "gap_accel5",
+            ),
+            (
+                "Corr($open / Ref($close, 1) - 1, Ref($open / Ref($close, 1) - 1, 1), 20)",
+                "gap_autocorr20",
+            ),
+            ("Mean($close, 20) / $close", "ma20"),
+            ("Std($close, 20) / $close", "std20"),
+            ("Slope($close, 20) / $close", "beta20"),
+            ("Rsquare($close, 20)", "rsqr20"),
+            ("Resi($close, 20) / $close", "resi20"),
+            ("Rank($close, 20)", "rank20"),
+            ("($close - Min($low, 20)) / (Max($high, 20) - Min($low, 20) + 1e-12)", "rsv20"),
+            ("IdxMax($high, 20) / 20", "imax20"),
+            ("IdxMin($low, 20) / 20", "imin20"),
+            ("(IdxMax($high, 20) - IdxMin($low, 20)) / 20", "imxd20"),
+            ("(Sum(Greater($close - Ref($close, 1), 0), 20) - Sum(Greater(Ref($close, 1) - $close, 0), 20)) / (Sum(Abs($close - Ref($close, 1)), 20) + 1e-12)", "sumd20"),
+            ("Mean($close > Ref($close, 1), 20) - Mean($close < Ref($close, 1), 20)", "cntd20"),
+            ("Corr($close, Log($volume + 1), 20)", "corr20"),
+            ("Corr($close / Ref($close, 1), Log($volume / Ref($volume, 1) + 1), 20)", "cord20"),
+            ("Std(Abs($close / Ref($close, 1) - 1) * $volume, 20) / (Mean(Abs($close / Ref($close, 1) - 1) * $volume, 20) + 1e-12)", "wvma20"),
             ("$turnover_rate", "turnover_rate"),
-            ("Mean($turnover_rate, 5)", "turnover_rate_mean_5"),
-            ("Std($turnover_rate, 20)", "turnover_rate_vol_20"),
+            ("Mean($turnover_rate, 5) / (Mean($turnover_rate, 20) + 1e-12)", "turnover_ratio_5_20"),
+            ("Std($turnover_rate, 20) / (Mean($turnover_rate, 20) + 1e-12)", "turnover_vol_20"),
         ],
-        label_expression="Ref($close, -5) / $close - 1",
+        label_expression=(
+            "0.5 * (Ref($open, -4) / Ref($open, -1) - 1) + "
+            "0.5 * (Ref($open, -6) / Ref($open, -1) - 1)"
+        ),
         model_type="lgbm",
         model_kwargs={
             "n_estimators": 300,
@@ -42,7 +77,7 @@ def build_experiment() -> ExperimentSpec:
             "min_child_samples": 100,
             "reg_lambda": 1.0,
         },
-        strategy_kwargs={"topk": 50, "n_drop": 5},
+        strategy_kwargs={"topk": 44, "n_drop": 3},
         seed=42,
     )
 
