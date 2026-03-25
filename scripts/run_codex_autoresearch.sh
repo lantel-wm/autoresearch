@@ -32,6 +32,7 @@ EOF
 }
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+default_pause_file="$repo_root/.codex/pause_supervisor"
 iterations=0
 sleep_seconds=2
 model=""
@@ -40,6 +41,7 @@ sandbox_mode="workspace-write"
 approval_policy="on-request"
 allow_shell_network=0
 start_mode="resume-or-fresh"
+pause_file="$default_pause_file"
 dangerous=0
 extra_prompt=""
 output_dir="$repo_root/tmp/codex_supervisor"
@@ -152,7 +154,7 @@ fi
 mkdir -p "$output_dir"
 
 pause_requested() {
-  [[ -e "$pause_file" ]]
+  [[ -e "${pause_file:-$default_pause_file}" ]]
 }
 
 json_field() {
@@ -304,8 +306,9 @@ while :; do
   run_preflight
 
   if pause_requested; then
+    current_pause_file="${pause_file:-$default_pause_file}"
     printf '[%s] pause requested via %s; stopping before step %s\n' \
-      "$(date '+%Y-%m-%d %H:%M:%S')" "$pause_file" "$step"
+      "$(date '+%Y-%m-%d %H:%M:%S')" "$current_pause_file" "$step"
     exit 0
   fi
   if [[ "$iterations" -gt 0 && "$step" -gt "$iterations" ]]; then
@@ -332,8 +335,9 @@ while :; do
 
   step=$((step + 1))
   if pause_requested; then
+    current_pause_file="${pause_file:-$default_pause_file}"
     printf '[%s] pause requested via %s; current step finished, stopping cleanly\n' \
-      "$(date '+%Y-%m-%d %H:%M:%S')" "$pause_file"
+      "$(date '+%Y-%m-%d %H:%M:%S')" "$current_pause_file"
     exit 0
   fi
   if [[ "$iterations" -eq 0 || "$step" -le "$iterations" ]]; then
