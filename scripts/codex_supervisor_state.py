@@ -114,14 +114,15 @@ def bootstrap_history(repo_root: Path) -> dict:
         category = classify_experiment(repo_root, row["description"], row["commit"])
         if category == "baseline":
             continue
+        valid = row["status"] != "crash" and category in {"factor", "label", "model", "strategy"}
         entries.append(
             {
                 "commit": row["commit"],
                 "description": row["description"],
                 "status": row["status"],
                 "category": category,
-                "valid": category in {"factor", "label", "model", "strategy"},
-                "valid_reason": "bootstrap",
+                "valid": valid,
+                "valid_reason": "bootstrap" if valid else "bootstrap_crash",
             }
         )
     return {"version": 1, "entries": entries}
@@ -246,7 +247,7 @@ def cmd_record_result(repo_root: Path, required: str) -> None:
 
     latest = rows[-1]
     category = classify_experiment(repo_root, latest["description"], latest["commit"])
-    valid = category == required
+    valid = latest["status"] != "crash" and category == required
     entry = {
         "commit": latest["commit"],
         "description": latest["description"],
@@ -254,7 +255,11 @@ def cmd_record_result(repo_root: Path, required: str) -> None:
         "category": category,
         "required_category": required,
         "valid": valid,
-        "valid_reason": "ok" if valid else "invalid_category",
+        "valid_reason": (
+            "ok"
+            if valid
+            else ("crash" if latest["status"] == "crash" else "invalid_category")
+        ),
     }
 
     if not valid and latest["status"] == "keep":
