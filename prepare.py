@@ -28,7 +28,6 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import qlib
-from qlib.config import DISK_EXPRESSION_CACHE
 from qlib.constant import REG_CN
 from qlib.data import D
 
@@ -163,7 +162,7 @@ def init_qlib(provider_uri: Path) -> None:
     qlib.init(
         provider_uri=provider_uri_str,
         region=REG_CN,
-        expression_cache=DISK_EXPRESSION_CACHE,
+        expression_cache=None,
         dataset_cache=None,
         default_disk_cache=1,
     )
