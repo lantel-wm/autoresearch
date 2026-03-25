@@ -28,7 +28,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import qlib
-from qlib.config import DISK_DATASET_CACHE, DISK_EXPRESSION_CACHE
+from qlib.config import DISK_EXPRESSION_CACHE
 from qlib.constant import REG_CN
 from qlib.data import D
 
@@ -114,6 +114,15 @@ class RunSummary:
     runtime_seconds: float
     provider_uri: str
     market: str
+    decision_reason: str | None = None
+    baseline_sharpe: float | None = None
+    baseline_rank_ic: float | None = None
+    baseline_turnover: float | None = None
+    baseline_max_drawdown: float | None = None
+    sharpe_delta: float | None = None
+    rank_ic_delta: float | None = None
+    turnover_ratio: float | None = None
+    max_drawdown_ratio: float | None = None
     folds: list[FoldMetrics] = field(default_factory=list)
     error: str | None = None
 
@@ -155,7 +164,7 @@ def init_qlib(provider_uri: Path) -> None:
         provider_uri=provider_uri_str,
         region=REG_CN,
         expression_cache=DISK_EXPRESSION_CACHE,
-        dataset_cache=DISK_DATASET_CACHE,
+        dataset_cache=None,
         default_disk_cache=1,
     )
     _QLIB_INITIALIZED_URI = provider_uri_str
@@ -480,19 +489,68 @@ def load_current_baseline() -> dict[str, float] | None:
     }
 
 
+def compute_ratio(current: float, baseline: float) -> float | None:
+    if baseline <= 0:
+        return None
+    return current / baseline
+
+
 def decide_status(summary: RunSummary) -> str:
     baseline = load_current_baseline()
     if baseline is None:
+        summary.decision_reason = "no_baseline"
         return "keep"
 
+    summary.baseline_sharpe = baseline["sharpe"]
+    summary.baseline_rank_ic = baseline["rank_ic"]
+    summary.baseline_turnover = baseline["turnover"]
+    summary.baseline_max_drawdown = baseline["max_drawdown"]
+    summary.sharpe_delta = summary.mean_sharpe - baseline["sharpe"]
+    summary.rank_ic_delta = summary.mean_rank_ic - baseline["rank_ic"]
+    summary.turnover_ratio = compute_ratio(summary.mean_turnover, baseline["turnover"])
+    summary.max_drawdown_ratio = compute_ratio(summary.mean_max_drawdown, baseline["max_drawdown"])
+
     if summary.mean_rank_ic <= 0.0:
+        summary.decision_reason = "rankic_nonpositive"
         return "discard"
-    if baseline["turnover"] > 0 and summary.mean_turnover > baseline["turnover"] * 1.25:
+    if summary.turnover_ratio is not None and summary.turnover_ratio > 1.25:
+        summary.decision_reason = "turnover_guardrail"
         return "discard"
-    if baseline["max_drawdown"] > 0 and summary.mean_max_drawdown > baseline["max_drawdown"] * 1.25:
+    if summary.max_drawdown_ratio is not None and summary.max_drawdown_ratio > 1.25:
+        summary.decision_reason = "drawdown_guardrail"
         return "discard"
-    if summary.mean_sharpe >= baseline["sharpe"] + 0.05:
+
+    if summary.sharpe_delta is not None and summary.sharpe_delta >= 0.05:
+        summary.decision_reason = "sharpe_clear_win"
         return "keep"
+
+    if (
+        summary.sharpe_delta is not None
+        and summary.sharpe_delta >= 0.02
+        and summary.turnover_ratio is not None
+        and summary.turnover_ratio <= 0.90
+        and summary.max_drawdown_ratio is not None
+        and summary.max_drawdown_ratio <= 1.02
+        and summary.rank_ic_delta is not None
+        and summary.rank_ic_delta >= -0.001
+    ):
+        summary.decision_reason = "composite_keep_turnover"
+        return "keep"
+
+    if (
+        summary.sharpe_delta is not None
+        and summary.sharpe_delta >= 0.01
+        and summary.turnover_ratio is not None
+        and summary.turnover_ratio <= 0.80
+        and summary.max_drawdown_ratio is not None
+        and summary.max_drawdown_ratio <= 1.00
+        and summary.rank_ic_delta is not None
+        and summary.rank_ic_delta >= 0.0
+    ):
+        summary.decision_reason = "composite_keep_strong_turnover"
+        return "keep"
+
+    summary.decision_reason = "below_keep_threshold"
     return "discard"
 
 
@@ -528,6 +586,8 @@ def write_run_json(summary: RunSummary) -> None:
 def print_summary(summary: RunSummary) -> None:
     print("---")
     print(f"status:           {summary.status}")
+    if summary.decision_reason:
+        print(f"decision_reason:  {summary.decision_reason}")
     print(f"mean_sharpe:      {summary.mean_sharpe:.6f}")
     print(f"mean_rank_ic:     {summary.mean_rank_ic:.6f}")
     print(f"mean_turnover:    {summary.mean_turnover:.6f}")

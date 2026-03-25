@@ -19,6 +19,8 @@ AGENTS.md
 
 # Experimental code/artifacts
 dev/
+.vscode/
+*.swp
 
 # Results file
 results.tsv
