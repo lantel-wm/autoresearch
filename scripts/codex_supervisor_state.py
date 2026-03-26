@@ -11,6 +11,7 @@ from pathlib import Path
 
 NOISE_EXACT = {"results.tsv", "run.json", "run.log"}
 NOISE_PREFIXES = ("tmp/", ".vscode/")
+LLM_CATEGORIES = {"factor", "label", "model", "strategy", "baseline", "other"}
 
 
 def git(repo_root: Path, *args: str, check: bool = True) -> str:
@@ -62,6 +63,14 @@ def load_run_summary(run_json_path: Path) -> dict:
 
 def save_run_summary(run_json_path: Path, payload: dict) -> None:
     run_json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def normalize_llm_category(category: str) -> str:
+    normalized = category.strip().lower()
+    if normalized not in LLM_CATEGORIES:
+        allowed = ", ".join(sorted(LLM_CATEGORIES))
+        raise SystemExit(f"Unsupported category: {category}. Allowed: {allowed}")
+    return normalized
 
 
 def normalize_status_path(path: str) -> str:
@@ -118,6 +127,17 @@ def classify_experiment(repo_root: Path, description: str, commit: str) -> str:
     return "other"
 
 
+def resolve_latest_category(repo_root: Path, latest: dict[str, str]) -> tuple[str, str]:
+    run_json_path = repo_root / "run.json"
+    if run_json_path.exists():
+        run_summary = load_run_summary(run_json_path)
+        if str(run_summary.get("commit", "")) == latest["commit"]:
+            llm_category = run_summary.get("llm_category")
+            if isinstance(llm_category, str) and llm_category.strip():
+                return normalize_llm_category(llm_category), "llm"
+    return classify_experiment(repo_root, latest["description"], latest["commit"]), "heuristic"
+
+
 def history_path(repo_root: Path) -> Path:
     return repo_root / "tmp" / "codex_supervisor" / "history.json"
 
@@ -128,7 +148,7 @@ def bootstrap_history(repo_root: Path) -> dict:
         category = classify_experiment(repo_root, row["description"], row["commit"])
         if category == "baseline":
             continue
-        valid = row["status"] in {"keep", "discard"} and category in {"factor", "label", "model", "strategy"}
+        valid = row["status"] in {"keep", "discard"} and category != "baseline"
         entries.append(
             {
                 "commit": row["commit"],
@@ -215,7 +235,7 @@ def cmd_preflight(repo_root: Path) -> None:
     )
 
 
-def cmd_finalize_result(repo_root: Path, decision: str, reason: str) -> None:
+def cmd_finalize_result(repo_root: Path, decision: str, reason: str, category: str | None) -> None:
     results_path = repo_root / "results.tsv"
     latest = latest_result_row(results_path)
     if latest is None:
@@ -223,6 +243,9 @@ def cmd_finalize_result(repo_root: Path, decision: str, reason: str) -> None:
 
     if decision not in {"keep", "discard"}:
         raise SystemExit(f"Unsupported decision: {decision}")
+    if not category:
+        raise SystemExit("--category is required for finalize-result")
+    normalized_category = normalize_llm_category(category)
 
     latest_status = latest["status"]
     if latest_status == "crash":
@@ -240,6 +263,7 @@ def cmd_finalize_result(repo_root: Path, decision: str, reason: str) -> None:
     run_summary["status"] = decision
     run_summary["llm_decision"] = decision
     run_summary["llm_decision_reason"] = reason.strip()
+    run_summary["llm_category"] = normalized_category
     save_run_summary(repo_root / "run.json", run_summary)
 
     print(
@@ -248,6 +272,7 @@ def cmd_finalize_result(repo_root: Path, decision: str, reason: str) -> None:
                 "commit": latest["commit"],
                 "previous_status": latest_status,
                 "status": decision,
+                "category": normalized_category,
                 "reason": reason.strip(),
             }
         )
@@ -276,27 +301,24 @@ def cmd_record_result(repo_root: Path, required: str | None) -> None:
         )
         raise SystemExit(2)
 
-    category = classify_experiment(repo_root, latest["description"], latest["commit"])
-    valid = latest["status"] in {"keep", "discard"} and category in {"factor", "label", "model", "strategy"}
+    category, category_source = resolve_latest_category(repo_root, latest)
+    valid = latest["status"] in {"keep", "discard"} and category != "baseline"
     entry = {
         "commit": latest["commit"],
         "description": latest["description"],
         "status": latest["status"],
         "category": category,
+        "category_source": category_source,
         "valid": valid,
         "valid_reason": (
             "ok"
             if valid
-            else ("crash" if latest["status"] == "crash" else "unknown_category")
+            else ("crash" if latest["status"] == "crash" else "baseline_category")
         ),
     }
 
     if required is not None:
         entry["required_category"] = required
-
-    if not valid and latest["status"] == "keep":
-        rewrite_latest_result_status(results_path, latest["commit"], "discard")
-        entry["status"] = "discard"
 
     entries = history["entries"]
     existing = next((i for i, item in enumerate(entries) if item["commit"] == latest["commit"]), None)
@@ -314,6 +336,7 @@ def main() -> int:
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--required-category")
     parser.add_argument("--decision")
+    parser.add_argument("--category")
     parser.add_argument("--reason", default="")
     args = parser.parse_args()
 
@@ -325,7 +348,7 @@ def main() -> int:
     if args.command == "finalize-result":
         if not args.decision:
             raise SystemExit("--decision is required for finalize-result")
-        cmd_finalize_result(repo_root, args.decision, args.reason)
+        cmd_finalize_result(repo_root, args.decision, args.reason, args.category)
         return 0
     if args.command == "record-result":
         cmd_record_result(repo_root, args.required_category)

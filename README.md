@@ -57,7 +57,7 @@ For normal successful runs, the initial `status` in `run.json` is provisional (`
 If you are running manually rather than through the supervisor, make the final `keep` / `discard` judgment yourself and then finalize it with:
 
 ```bash
-python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --reason "short reason"
+python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --category factor|label|model|strategy|baseline|other --reason "short reason"
 ```
 
 ## Runtime

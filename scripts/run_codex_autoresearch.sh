@@ -280,12 +280,13 @@ Complete exactly one full autoresearch iteration:
    - hard_reject: the run violated a last-resort safety floor; normally discard it.
    - crash: the run failed structurally.
 8. If the harness status is candidate, compare it against the current kept baseline and decide keep/discard yourself. Use the full tradeoff, not a single fixed threshold.
-9. Finalize the latest provisional result before changing git state:
-   python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --reason "short reason"
-10. If the final decision is keep, keep the commit.
-11. If the final decision is discard, revert to the previous kept commit.
-12. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
-13. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
+9. Also decide the experiment category yourself from factor|label|model|strategy|baseline|other.
+10. Finalize the latest provisional result before changing git state:
+   python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --category factor|label|model|strategy|baseline|other --reason "short reason"
+11. If the final decision is keep, keep the commit.
+12. If the final decision is discard, revert to the previous kept commit.
+13. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
+14. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
 
 Do not ask whether to continue. The supervisor will launch the next step.
 Do not stop before either finishing one completed iteration or reporting a concrete blocker.
@@ -379,10 +380,6 @@ record_step_result() {
   category="$(json_field "$payload" "category")"
   printf '[%s] recorded %s experiment result: %s (%s)\n' \
     "$(date '+%Y-%m-%d %H:%M:%S')" "$category" "$status" "$commit"
-  if [[ "$valid_reason" == "unknown_category" && "$status" == "keep" ]]; then
-    git revert --no-edit "$commit"
-    printf '[%s] reverted unsupported keep candidate %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$commit" >&2
-  fi
 }
 
 while :; do

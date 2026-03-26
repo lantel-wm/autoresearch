@@ -140,16 +140,17 @@ Repeat this cycle:
 
 7. Read the result from `run.json` or grep the summary lines from `run.log`.
 8. If the harness status is `candidate`, compare it against the current kept baseline and decide `keep` or `discard` yourself. Use the full tradeoff, not a single fixed threshold.
-9. Finalize the latest provisional result before changing git state:
+9. Also decide the experiment category yourself from `factor|label|model|strategy|baseline|other`.
+10. Finalize the latest provisional result before changing git state:
 
    ```bash
-   python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --reason "short reason"
+   python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --category factor|label|model|strategy|baseline|other --reason "short reason"
    ```
 
-10. If the final decision is `keep`, keep the commit and advance the branch.
-11. If the final decision is `discard`, revert to the previous kept commit.
-12. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
-13. Move on to the next experiment from the resulting clean state.
+11. If the final decision is `keep`, keep the commit and advance the branch.
+12. If the final decision is `discard`, revert to the previous kept commit.
+13. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
+14. Move on to the next experiment from the resulting clean state.
 
 ## Decision rule
 
