@@ -49,6 +49,12 @@ dangerous=0
 extra_prompt=""
 output_dir="$repo_root/tmp/codex_supervisor"
 state_helper="$repo_root/scripts/codex_supervisor_state.py"
+current_branch=""
+current_keep_commit=""
+current_signature=""
+loaded_step_branch=""
+step=0
+local_steps_run=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -185,9 +191,72 @@ run_preflight() {
     fi
     exit 1
   fi
+  current_branch="$(git -C "$repo_root" branch --show-current)"
+  current_keep_commit="$(json_field "$payload" "latest_keep_commit")"
+  current_signature="${current_branch}"
   if [[ "$(json_field "$payload" "restored_train")" == "True" || "$(json_field "$payload" "restored_train")" == "true" ]]; then
     printf '[%s] restored train.py to latest kept baseline\n' "$(date '+%Y-%m-%d %H:%M:%S')"
   fi
+}
+
+latest_results_commit() {
+  awk -F '\t' 'NR > 1 { last = $1 } END { print last }' "$repo_root/results.tsv" 2>/dev/null
+}
+
+last_message_has_blocker() {
+  [[ -f "$output_dir/last_message.txt" ]] && grep -Eiq 'concrete blocker|I.?m stopping here because' "$output_dir/last_message.txt"
+}
+
+branch_slug() {
+  local branch="$1"
+  branch="${branch//\//__}"
+  branch="${branch// /_}"
+  printf '%s' "$branch"
+}
+
+branch_step_file() {
+  local branch="$1"
+  printf '%s/step_counter_%s.txt' "$output_dir" "$(branch_slug "$branch")"
+}
+
+branch_artifact_dir() {
+  local branch="$1"
+  printf '%s/%s' "$output_dir" "$(branch_slug "$branch")"
+}
+
+load_branch_step() {
+  local branch="$1"
+  local file max_step
+  file="$(branch_step_file "$branch")"
+  if [[ -f "$file" ]]; then
+    cat "$file"
+    return 0
+  fi
+
+  max_step="$(find "$output_dir" -maxdepth 1 -type f -name 'step_*.txt' -print 2>/dev/null | \
+    sed -E 's#^.*/step_([0-9]+)\.txt$#\1#' | sort -n | tail -n 1)"
+  if [[ -n "$max_step" ]]; then
+    printf '%s' "$((10#$max_step + 1))"
+  else
+    printf '1'
+  fi
+}
+
+save_branch_step() {
+  local branch="$1"
+  local next_step="$2"
+  printf '%s\n' "$next_step" > "$(branch_step_file "$branch")"
+}
+
+save_step_run_json() {
+  local branch="$1"
+  local step="$2"
+  local target_dir target_file
+  [[ -f "$repo_root/run.json" ]] || return 0
+  target_dir="$(branch_artifact_dir "$branch")"
+  mkdir -p "$target_dir"
+  target_file="$target_dir/run_$(printf '%04d' "$step").json"
+  cp "$repo_root/run.json" "$target_file"
 }
 
 build_prompt() {
@@ -259,6 +328,21 @@ run_step() {
     try_resume=1
   fi
 
+  local signature_file stored_signature
+  signature_file="$output_dir/session_signature.txt"
+  stored_signature=""
+  if [[ -f "$signature_file" ]]; then
+    stored_signature="$(<"$signature_file")"
+  fi
+  if [[ -z "$stored_signature" && -f "$output_dir/last_message.txt" ]]; then
+    printf 'Missing session signature for existing supervisor state; starting a fresh Codex session.\n' >&2
+    try_resume=0
+  elif [[ -n "$stored_signature" && "$stored_signature" != "$current_signature" ]]; then
+    printf 'Session signature changed (%s -> %s); starting a fresh Codex session.\n' \
+      "$stored_signature" "$current_signature" >&2
+    try_resume=0
+  fi
+
   if [[ "$try_resume" -eq 1 ]]; then
     local resume_rc
     if "$codex_bin" exec resume --last "${common_args_resume[@]}" "$prompt"; then
@@ -291,9 +375,13 @@ record_step_result() {
   fi
 }
 
-step=1
 while :; do
   run_preflight
+
+  if [[ "$loaded_step_branch" != "$current_branch" ]]; then
+    step="$(load_branch_step "$current_branch")"
+    loaded_step_branch="$current_branch"
+  fi
 
   if pause_requested; then
     current_pause_file="${pause_file:-$default_pause_file}"
@@ -302,11 +390,12 @@ while :; do
     exit 0
   fi
 
-  if [[ "$iterations" -gt 0 && "$step" -gt "$iterations" ]]; then
+  if [[ "$iterations" -gt 0 && "$local_steps_run" -ge "$iterations" ]]; then
     break
   fi
 
   printf '\n[%s] starting Codex step %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$step"
+  previous_result_commit="$(latest_results_commit)"
   if run_step "$step"; then
     printf '[%s] step %s completed\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$step"
   else
@@ -315,13 +404,30 @@ while :; do
     exit "$rc"
   fi
 
+  latest_result_commit="$(latest_results_commit)"
+  if [[ "$latest_result_commit" == "$previous_result_commit" ]]; then
+    if last_message_has_blocker; then
+      printf '[%s] concrete blocker reported without a new result row; stopping supervisor loop\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" >&2
+      exit 0
+    fi
+    printf '[%s] no new results.tsv row was produced by step %s; stopping supervisor loop\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "$step" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$current_signature" > "$output_dir/session_signature.txt"
+
   record_step_result
+  save_step_run_json "$current_branch" "$step"
 
   if [[ -f "$output_dir/last_message.txt" ]]; then
     cp "$output_dir/last_message.txt" "$output_dir/step_$(printf '%04d' "$step").txt"
   fi
 
+  local_steps_run=$((local_steps_run + 1))
   step=$((step + 1))
+  save_branch_step "$current_branch" "$step"
   if pause_requested; then
     current_pause_file="${pause_file:-$default_pause_file}"
     printf '[%s] pause requested via %s; current step finished, stopping cleanly\n' \
