@@ -53,6 +53,12 @@ tail -n 40 run.log
 ```
 
 After the first run you will also have an untracked `results.tsv` ledger in the repo root.
+For normal successful runs, the initial `status` in `run.json` is provisional (`candidate` or `hard_reject`).
+If you are running manually rather than through the supervisor, make the final `keep` / `discard` judgment yourself and then finalize it with:
+
+```bash
+python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --reason "short reason"
+```
 
 ## Runtime
 
