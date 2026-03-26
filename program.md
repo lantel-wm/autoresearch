@@ -20,6 +20,8 @@ To set up a new run, work with the user to:
 ## Experimentation
 
 Each experiment runs in the local `qlib` conda environment. The fixed harness in `prepare.py` evaluates a candidate on five rolling yearly folds and enforces a hard wall-clock budget of 10 minutes.
+It computes metrics, baseline-relative deltas, and last-resort hard rejects.
+The final `keep` / `discard` choice is made by the LLM, not by a fixed threshold block in the harness.
 
 **What you CAN do:**
 - Modify `train.py` only.
@@ -28,7 +30,7 @@ Each experiment runs in the local `qlib` conda environment. The fixed harness in
 - Change factor expressions, realistic label variants, model hyperparameters, and small strategy knobs inside `train.py`, but keep the current harness interface unchanged.
 
 **What you CANNOT do:**
-- Modify `prepare.py` during the loop. It owns the evaluation harness and keep/discard logic.
+- Modify `prepare.py` during the loop. It owns the evaluation harness and the hard safety floors.
 - Install new packages.
 - Add `vwap`-dependent factors.
 - Change the market, data source contract, or evaluation fold definitions during the loop.
@@ -82,7 +84,7 @@ At the end of each run, the harness prints:
 
 ```text
 ---
-status:           keep|discard|crash
+status:           candidate|hard_reject|crash
 mean_sharpe:      ...
 mean_rank_ic:     ...
 mean_turnover:    ...
@@ -96,6 +98,14 @@ It also writes:
 
 - `run.json` with the full machine-readable summary
 - `results.tsv` with the compact experiment ledger
+
+Immediately after `train.py` finishes, those are provisional:
+
+- `candidate` means the run is structurally valid and the LLM must decide `keep` or `discard`.
+- `hard_reject` means the run violated a last-resort safety floor such as non-positive RankIC or an extreme turnover / drawdown blowup.
+- `crash` means the run failed structurally.
+
+During autonomous runs, the supervisor rewrites the latest row and `run.json` to the final `keep` / `discard` status after the LLM judges the tradeoff.
 
 ## Logging results
 
@@ -129,17 +139,27 @@ Repeat this cycle:
    ```
 
 7. Read the result from `run.json` or grep the summary lines from `run.log`.
-8. If `status: keep`, keep the commit and advance the branch.
-9. If `status: discard`, revert to the previous kept commit.
-10. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
-11. Move on to the next experiment from the resulting clean state.
+8. If the harness status is `candidate`, compare it against the current kept baseline and decide `keep` or `discard` yourself. Use the full tradeoff, not a single fixed threshold.
+9. Finalize the latest provisional result before changing git state:
+
+   ```bash
+   python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --reason "short reason"
+   ```
+
+10. If the final decision is `keep`, keep the commit and advance the branch.
+11. If the final decision is `discard`, revert to the previous kept commit.
+12. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
+13. Move on to the next experiment from the resulting clean state.
 
 ## Decision rule
 
-The harness is the source of truth.
+The harness is the source of truth for metrics, baselines, and last-resort safety floors.
+The LLM is the source of truth for the final `keep` / `discard` choice on normal candidates.
 
-- `keep` means the candidate beat the current kept baseline on the fixed objective.
-- `discard` means it failed the objective or violated guardrails.
+- `candidate` means the run is structurally valid and needs LLM judgment.
+- `hard_reject` means the run failed a last-resort safety floor and should normally be discarded.
+- `keep` means the LLM judged that the candidate beat the current kept baseline on the total tradeoff.
+- `discard` means the LLM judged that it did not, or the run violated a hard floor.
 - `crash` means the run failed structurally or exceeded the budget.
 
 ## Simplicity criterion

@@ -7,7 +7,7 @@ Fixed Qlib harness for autoresearch-style quant experiments.
 - data loading from the local Qlib provider
 - model fitting and backtest evaluation
 - run summary serialization
-- keep/discard status decisions against the current kept baseline
+- baseline-relative metrics and last-resort hard rejects
 """
 
 from __future__ import annotations
@@ -47,6 +47,8 @@ OPEN_COST = 0.0005
 CLOSE_COST = 0.0015
 MIN_COST = 5.0
 ACCOUNT_SIZE = 1_000_000.0
+HARD_REJECT_TURNOVER_RATIO = 1.60
+HARD_REJECT_DRAWDOWN_RATIO = 1.35
 
 RESULTS_TSV_PATH = Path("results.tsv")
 RUN_JSON_PATH = Path("run.json")
@@ -113,7 +115,12 @@ class RunSummary:
     runtime_seconds: float
     provider_uri: str
     market: str
+    harness_status: str | None = None
+    hard_reject: bool | None = None
+    hard_reject_reason: str | None = None
     decision_reason: str | None = None
+    baseline_commit: str | None = None
+    baseline_description: str | None = None
     baseline_sharpe: float | None = None
     baseline_rank_ic: float | None = None
     baseline_turnover: float | None = None
@@ -122,6 +129,8 @@ class RunSummary:
     rank_ic_delta: float | None = None
     turnover_ratio: float | None = None
     max_drawdown_ratio: float | None = None
+    llm_decision: str | None = None
+    llm_decision_reason: str | None = None
     folds: list[FoldMetrics] = field(default_factory=list)
     error: str | None = None
 
@@ -456,6 +465,7 @@ def aggregate_summary(
         commit=current_commit_hash(),
         description=spec.description,
         status=status,
+        harness_status=status,
         mean_sharpe=recency_weighted_mean([fold.sharpe for fold in folds], folds),
         mean_rank_ic=recency_weighted_mean([fold.rank_ic for fold in folds], folds),
         mean_turnover=recency_weighted_mean([fold.turnover for fold in folds], folds),
@@ -482,7 +492,7 @@ def current_commit_hash() -> str:
         return "unknown"
 
 
-def load_current_baseline() -> dict[str, float] | None:
+def load_current_baseline() -> dict[str, float | str] | None:
     if not RESULTS_TSV_PATH.exists() or RESULTS_TSV_PATH.stat().st_size == 0:
         return None
 
@@ -493,6 +503,8 @@ def load_current_baseline() -> dict[str, float] | None:
 
     latest = kept.iloc[-1]
     return {
+        "commit": str(latest["commit"]),
+        "description": str(latest["description"]),
         "sharpe": float(latest["sharpe"]),
         "rank_ic": float(latest["rank_ic"]),
         "turnover": float(latest["turnover"]),
@@ -506,12 +518,15 @@ def compute_ratio(current: float, baseline: float) -> float | None:
     return current / baseline
 
 
-def decide_status(summary: RunSummary) -> str:
+def evaluate_harness_status(summary: RunSummary) -> str:
     baseline = load_current_baseline()
     if baseline is None:
         summary.decision_reason = "no_baseline"
-        return "keep"
+        summary.hard_reject = False
+        return "candidate"
 
+    summary.baseline_commit = str(baseline["commit"])
+    summary.baseline_description = str(baseline["description"])
     summary.baseline_sharpe = baseline["sharpe"]
     summary.baseline_rank_ic = baseline["rank_ic"]
     summary.baseline_turnover = baseline["turnover"]
@@ -522,47 +537,24 @@ def decide_status(summary: RunSummary) -> str:
     summary.max_drawdown_ratio = compute_ratio(summary.mean_max_drawdown, baseline["max_drawdown"])
 
     if summary.mean_rank_ic <= 0.0:
-        summary.decision_reason = "rankic_nonpositive"
-        return "discard"
-    if summary.turnover_ratio is not None and summary.turnover_ratio > 1.25:
-        summary.decision_reason = "turnover_guardrail"
-        return "discard"
-    if summary.max_drawdown_ratio is not None and summary.max_drawdown_ratio > 1.25:
-        summary.decision_reason = "drawdown_guardrail"
-        return "discard"
+        summary.hard_reject = True
+        summary.hard_reject_reason = "rankic_nonpositive"
+        summary.decision_reason = "hard_reject"
+        return "hard_reject"
+    if summary.turnover_ratio is not None and summary.turnover_ratio > HARD_REJECT_TURNOVER_RATIO:
+        summary.hard_reject = True
+        summary.hard_reject_reason = "turnover_extreme"
+        summary.decision_reason = "hard_reject"
+        return "hard_reject"
+    if summary.max_drawdown_ratio is not None and summary.max_drawdown_ratio > HARD_REJECT_DRAWDOWN_RATIO:
+        summary.hard_reject = True
+        summary.hard_reject_reason = "drawdown_extreme"
+        summary.decision_reason = "hard_reject"
+        return "hard_reject"
 
-    if summary.sharpe_delta is not None and summary.sharpe_delta >= 0.05:
-        summary.decision_reason = "sharpe_clear_win"
-        return "keep"
-
-    if (
-        summary.sharpe_delta is not None
-        and summary.sharpe_delta >= 0.02
-        and summary.turnover_ratio is not None
-        and summary.turnover_ratio <= 0.90
-        and summary.max_drawdown_ratio is not None
-        and summary.max_drawdown_ratio <= 1.02
-        and summary.rank_ic_delta is not None
-        and summary.rank_ic_delta >= -0.001
-    ):
-        summary.decision_reason = "composite_keep_turnover"
-        return "keep"
-
-    if (
-        summary.sharpe_delta is not None
-        and summary.sharpe_delta >= 0.01
-        and summary.turnover_ratio is not None
-        and summary.turnover_ratio <= 0.80
-        and summary.max_drawdown_ratio is not None
-        and summary.max_drawdown_ratio <= 1.00
-        and summary.rank_ic_delta is not None
-        and summary.rank_ic_delta >= 0.0
-    ):
-        summary.decision_reason = "composite_keep_strong_turnover"
-        return "keep"
-
-    summary.decision_reason = "below_keep_threshold"
-    return "discard"
+    summary.hard_reject = False
+    summary.decision_reason = "llm_decision_required"
+    return "candidate"
 
 
 def ensure_results_header() -> None:
@@ -599,6 +591,10 @@ def print_summary(summary: RunSummary) -> None:
     print(f"status:           {summary.status}")
     if summary.decision_reason:
         print(f"decision_reason:  {summary.decision_reason}")
+    if summary.hard_reject is not None:
+        print(f"hard_reject:      {str(summary.hard_reject).lower()}")
+    if summary.hard_reject_reason:
+        print(f"hard_reject_reason:{summary.hard_reject_reason}")
     print(f"mean_sharpe:      {summary.mean_sharpe:.6f}")
     print(f"mean_rank_ic:     {summary.mean_rank_ic:.6f}")
     print(f"mean_turnover:    {summary.mean_turnover:.6f}")
@@ -627,9 +623,10 @@ def run_experiment(spec: ExperimentSpec) -> RunSummary:
             spec=spec,
             folds=folds,
             runtime_seconds=runtime_seconds,
-            status="pending",
+            status="candidate",
         )
-        summary.status = decide_status(summary)
+        summary.harness_status = evaluate_harness_status(summary)
+        summary.status = summary.harness_status
     except Exception as exc:
         runtime_seconds = time.perf_counter() - start_time
         error = f"{exc.__class__.__name__}: {exc}"
@@ -641,6 +638,7 @@ def run_experiment(spec: ExperimentSpec) -> RunSummary:
             status="crash",
             error=error,
         )
+        summary.hard_reject = False
 
     write_run_json(summary)
     append_results_tsv(summary)

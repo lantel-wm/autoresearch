@@ -49,6 +49,21 @@ def latest_keep_row(results_path: Path) -> dict[str, str] | None:
     return keeps[-1] if keeps else None
 
 
+def latest_result_row(results_path: Path) -> dict[str, str] | None:
+    rows = load_results(results_path)
+    return rows[-1] if rows else None
+
+
+def load_run_summary(run_json_path: Path) -> dict:
+    if not run_json_path.exists():
+        raise SystemExit(f"run.json is missing at {run_json_path}")
+    return json.loads(run_json_path.read_text(encoding="utf-8"))
+
+
+def save_run_summary(run_json_path: Path, payload: dict) -> None:
+    run_json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def normalize_status_path(path: str) -> str:
     return path.split(" -> ", 1)[-1]
 
@@ -113,7 +128,7 @@ def bootstrap_history(repo_root: Path) -> dict:
         category = classify_experiment(repo_root, row["description"], row["commit"])
         if category == "baseline":
             continue
-        valid = row["status"] != "crash" and category in {"factor", "label", "model", "strategy"}
+        valid = row["status"] in {"keep", "discard"} and category in {"factor", "label", "model", "strategy"}
         entries.append(
             {
                 "commit": row["commit"],
@@ -121,7 +136,7 @@ def bootstrap_history(repo_root: Path) -> dict:
                 "status": row["status"],
                 "category": category,
                 "valid": valid,
-                "valid_reason": "bootstrap" if valid else "bootstrap_crash",
+                "valid_reason": "bootstrap" if valid else f"bootstrap_{row['status']}",
             }
         )
     return {"version": 1, "entries": entries}
@@ -200,6 +215,45 @@ def cmd_preflight(repo_root: Path) -> None:
     )
 
 
+def cmd_finalize_result(repo_root: Path, decision: str, reason: str) -> None:
+    results_path = repo_root / "results.tsv"
+    latest = latest_result_row(results_path)
+    if latest is None:
+        raise SystemExit("results.tsv is empty; cannot finalize result")
+
+    if decision not in {"keep", "discard"}:
+        raise SystemExit(f"Unsupported decision: {decision}")
+
+    latest_status = latest["status"]
+    if latest_status == "crash":
+        raise SystemExit("Crash results are already final; do not finalize them again")
+    if latest_status == "hard_reject" and decision != "discard":
+        raise SystemExit("hard_reject results can only be finalized as discard")
+    if latest_status in {"keep", "discard"} and latest_status != decision:
+        raise SystemExit(f"Latest result is already finalized as {latest_status}")
+
+    rewrite_latest_result_status(results_path, latest["commit"], decision)
+
+    run_summary = load_run_summary(repo_root / "run.json")
+    prior_status = str(run_summary.get("status", latest_status))
+    run_summary["harness_status"] = run_summary.get("harness_status") or prior_status
+    run_summary["status"] = decision
+    run_summary["llm_decision"] = decision
+    run_summary["llm_decision_reason"] = reason.strip()
+    save_run_summary(repo_root / "run.json", run_summary)
+
+    print(
+        json.dumps(
+            {
+                "commit": latest["commit"],
+                "previous_status": latest_status,
+                "status": decision,
+                "reason": reason.strip(),
+            }
+        )
+    )
+
+
 def cmd_record_result(repo_root: Path, required: str | None) -> None:
     history = load_or_bootstrap_history(repo_root)
     results_path = repo_root / "results.tsv"
@@ -208,8 +262,22 @@ def cmd_record_result(repo_root: Path, required: str | None) -> None:
         raise SystemExit("results.tsv is empty; cannot record result")
 
     latest = rows[-1]
+    if latest["status"] in {"candidate", "hard_reject"}:
+        print(
+            json.dumps(
+                {
+                    "commit": latest["commit"],
+                    "description": latest["description"],
+                    "status": latest["status"],
+                    "valid": False,
+                    "valid_reason": "unfinalized_status",
+                }
+            )
+        )
+        raise SystemExit(2)
+
     category = classify_experiment(repo_root, latest["description"], latest["commit"])
-    valid = latest["status"] != "crash" and category in {"factor", "label", "model", "strategy"}
+    valid = latest["status"] in {"keep", "discard"} and category in {"factor", "label", "model", "strategy"}
     entry = {
         "commit": latest["commit"],
         "description": latest["description"],
@@ -242,15 +310,22 @@ def cmd_record_result(repo_root: Path, required: str | None) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="State helpers for autoresearch supervisor.")
-    parser.add_argument("command", choices=["preflight", "record-result"])
+    parser.add_argument("command", choices=["preflight", "finalize-result", "record-result"])
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--required-category")
+    parser.add_argument("--decision")
+    parser.add_argument("--reason", default="")
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
 
     if args.command == "preflight":
         cmd_preflight(repo_root)
+        return 0
+    if args.command == "finalize-result":
+        if not args.decision:
+            raise SystemExit("--decision is required for finalize-result")
+        cmd_finalize_result(repo_root, args.decision, args.reason)
         return 0
     if args.command == "record-result":
         cmd_record_result(repo_root, args.required_category)

@@ -8,7 +8,7 @@ The original idea of the repo stays intact: give an AI agent a small but real re
 
 The repo is deliberately small and only has three files that matter:
 
-- `prepare.py` — the fixed Qlib harness. It validates the local provider, loads features from Qlib, runs the rolling-fold evaluation, backtests the signal, writes `run.json`, and decides `keep` vs `discard`.
+- `prepare.py` — the fixed Qlib harness. It validates the local provider, loads features from Qlib, runs the rolling-fold evaluation, backtests the signal, writes `run.json`, and emits provisional candidate metrics plus last-resort hard rejects.
 - `train.py` — the only file the agent edits. It defines the candidate experiment: mainly factor families and label expressions, with little smaller model and strategy follow-up tweaks.
 - `program.md` — the human-authored instruction file that tells the autonomous agent how to operate.
 
@@ -19,6 +19,8 @@ The philosophy is the same as the original repo:
 - one fixed evaluation harness
 - one short comparable experiment loop
 - one branch that only advances when the candidate improves
+
+The important implementation detail is that the harness no longer decides `keep` vs `discard` for normal runs. It only computes metrics, baseline-relative deltas, and extreme safety-floor failures. The final decision is made by the supervising LLM and then written back into `run.json` and `results.tsv`.
 
 ## Quick start
 
@@ -117,7 +119,7 @@ By default the launcher uses `workspace-write` plus `approval_policy="on-request
 
 The launcher scripts explicitly disable repo-local hooks with `--disable codex_hooks`, because they already implement their own run-loop behavior.
 
-The current supervisor only enforces state hygiene and result recording. It does not force a factor/label/model/strategy category. The Codex run chooses the next experiment direction itself from the repository state and recent results.
+The current supervisor only enforces state hygiene and result recording. It does not force a factor/label/model/strategy category, and it does not hard-code the final `keep` / `discard` threshold. The Codex run chooses the next experiment direction itself from the repository state and recent results, and it finalizes each normal candidate after reading the full tradeoff from `run.json`.
 
 If you are on a recent Codex release with hooks support, this repo also includes repo-local Codex hooks under [.codex/config.toml](/Users/zhaozhiyu/Projects/autoresearch/.codex/config.toml) and [.codex/hooks.json](/Users/zhaozhiyu/Projects/autoresearch/.codex/hooks.json). The `SessionStart` hook injects the current branch/run state, and the `Stop` hook attempts to block natural stopping and tell Codex to continue the next autoresearch step.
 

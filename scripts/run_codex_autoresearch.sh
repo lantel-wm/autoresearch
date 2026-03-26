@@ -275,11 +275,17 @@ Complete exactly one full autoresearch iteration:
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
    QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
    conda run -n qlib python train.py > run.log 2>&1
-7. Read run.json or run.log.
-8. If status is keep, keep the commit.
-9. If status is discard, revert to the previous kept commit.
-10. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
-11. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
+7. Read run.json or run.log. The harness now emits provisional statuses:
+   - candidate: metrics are available and you must decide keep/discard yourself.
+   - hard_reject: the run violated a last-resort safety floor; normally discard it.
+   - crash: the run failed structurally.
+8. If the harness status is candidate, compare it against the current kept baseline and decide keep/discard yourself. Use the full tradeoff, not a single fixed threshold.
+9. Finalize the latest provisional result before changing git state:
+   python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --reason "short reason"
+10. If the final decision is keep, keep the commit.
+11. If the final decision is discard, revert to the previous kept commit.
+12. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
+13. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
 
 Do not ask whether to continue. The supervisor will launch the next step.
 Do not stop before either finishing one completed iteration or reporting a concrete blocker.
@@ -361,7 +367,11 @@ run_step() {
 
 record_step_result() {
   local payload
-  payload="$(python3 "$state_helper" record-result --repo-root "$repo_root")"
+  if ! payload="$(python3 "$state_helper" record-result --repo-root "$repo_root" 2>&1)"; then
+    printf '[%s] failed to record supervisor result state: %s\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "$payload" >&2
+    exit 1
+  fi
   local valid_reason commit status category
   valid_reason="$(json_field "$payload" "valid_reason")"
   commit="$(json_field "$payload" "commit")"
