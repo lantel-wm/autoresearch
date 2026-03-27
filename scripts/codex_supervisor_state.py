@@ -210,15 +210,14 @@ def save_history(repo_root: Path, history: dict) -> None:
     path.write_text(json.dumps(history, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def restore_train(repo_root: Path, keep_commit: str) -> bool:
-    current = (repo_root / "train.py").read_text(encoding="utf-8")
-    keep_content = git(repo_root, "show", f"{keep_commit}:train.py")
-    if current == keep_content:
-        return False
-    (repo_root / "train.py").write_text(keep_content, encoding="utf-8")
-    git(repo_root, "add", "train.py")
-    git(repo_root, "commit", "-m", "Restore kept train baseline")
-    return True
+def normalized_text(value: str) -> str:
+    return value.rstrip("\n")
+
+
+def train_matches_keep(repo_root: Path, keep_commit: str) -> bool:
+    current = normalized_text((repo_root / "train.py").read_text(encoding="utf-8"))
+    keep_content = normalized_text(git(repo_root, "show", f"{keep_commit}:train.py"))
+    return current == keep_content
 
 
 def cmd_preflight(repo_root: Path) -> None:
@@ -283,7 +282,19 @@ def cmd_preflight(repo_root: Path) -> None:
         )
         return
 
-    restored = restore_train(repo_root, keep["commit"])
+    if not train_matches_keep(repo_root, keep["commit"]):
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "reason": "train_restore_required",
+                    "restored_train": False,
+                    "latest_keep_commit": keep["commit"],
+                }
+            )
+        )
+        return
+
     state.update(
         {
             "version": 1,
@@ -298,8 +309,8 @@ def cmd_preflight(repo_root: Path) -> None:
         json.dumps(
             {
                 "ok": True,
-                "reason": "restored_train" if restored else "clean",
-                "restored_train": restored,
+                "reason": "clean",
+                "restored_train": False,
                 "latest_keep_commit": keep["commit"],
                 "branch_restore_mode": restore_result.get("mode"),
             }

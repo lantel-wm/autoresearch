@@ -194,7 +194,10 @@ run_preflight() {
   current_branch="$(git -C "$repo_root" branch --show-current)"
   current_keep_commit="$(json_field "$payload" "latest_keep_commit")"
   current_signature="${current_branch}"
-  if [[ "$(json_field "$payload" "restored_train")" == "True" || "$(json_field "$payload" "restored_train")" == "true" ]]; then
+  if [[ "$(json_field "$payload" "reason")" == "train_restore_required" ]]; then
+    git -C "$repo_root" show "${current_keep_commit}:train.py" > "$repo_root/train.py"
+    git -C "$repo_root" commit -am "Restore kept train baseline" >/dev/null
+    current_signature="${current_branch}"
     printf '[%s] restored train.py to latest kept baseline\n' "$(date '+%Y-%m-%d %H:%M:%S')"
   fi
 }
