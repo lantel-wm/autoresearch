@@ -327,9 +327,13 @@ def cmd_finalize_result(repo_root: Path, decision: str, reason: str, category: s
     run_summary = load_run_summary(repo_root / "run.json")
     prior_status = str(run_summary.get("status", latest_status))
     run_summary["harness_status"] = run_summary.get("harness_status") or prior_status
+    run_summary["harness_decision_reason"] = run_summary.get("harness_decision_reason") or run_summary.get(
+        "decision_reason"
+    )
     run_summary["status"] = decision
     run_summary["final_status"] = decision
     run_summary["final_reason"] = reason.strip()
+    run_summary["decision_reason"] = reason.strip()
     run_summary["llm_decision"] = decision
     run_summary["llm_decision_reason"] = reason.strip()
     run_summary["llm_category"] = normalized_category

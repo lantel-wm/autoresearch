@@ -12,17 +12,19 @@ It is intentionally narrow:
 
 It is **not** a production execution stack and **not** a full fundamental multi-factor platform.
 
-## What Changed In v2
+## What Changed In v3
 
-The repository now uses a stricter `qlib_official_daily_v2` evaluation contract:
+The repository now uses a stricter `qlib_official_daily_v3` evaluation contract:
 
 - the backtest path is based on Qlib official daily backtest semantics
+- the decision metric is pool-benchmark excess-with-cost Sharpe
+- external HS300 excess Sharpe is still reported separately
+- exchange-level volume participation and impact cost constraints are enabled
 - results are versioned by `backtest_version`
 - `run_state.json` separates workflow state from experiment summary
 - `results.tsv` carries versioned compact ledger rows
-- the decision metric is now excess-with-cost Sharpe rather than raw portfolio Sharpe
 
-Because of that change, old `v1_legacy` history stays useful for archaeology, but new `v2` experiments must compare only against `v2` baselines.
+Because of that change, old `v1_legacy` and `qlib_official_daily_v2` history stays useful for archaeology, but new `v3` experiments must compare only against `v3` baselines.
 
 ## How It Works
 
@@ -80,9 +82,10 @@ Each run produces:
 - `results.tsv` — compact versioned ledger
 - `run.log` — raw stdout/stderr if you redirected output
 
-The v2 summary includes:
+The v3 summary includes:
 
-- `mean_sharpe` (decision metric: excess-with-cost Sharpe)
+- `mean_sharpe` (decision metric: pool-benchmark excess-with-cost Sharpe)
+- `mean_external_sharpe`
 - `mean_raw_sharpe`
 - `mean_rank_ic`
 - `mean_turnover`
@@ -90,6 +93,7 @@ The v2 summary includes:
 - `mean_annual_return`
 - `mean_excess_annual_return`
 - `mean_benchmark_annual_return`
+- `mean_pool_benchmark_annual_return`
 - `mean_cost_rate`
 - fold-stability diagnostics
 
@@ -103,7 +107,7 @@ For Codex, the recommended path remains the external supervisor launcher:
 
 The supervisor still exists for the same reason as before: interactive “never stop” behavior is not reliable enough on its own.
 
-Important v2 operating rules:
+Important v3 operating rules:
 
 - inspect `run_state.json` before every step
 - compare only within the same `backtest_version`
@@ -112,7 +116,7 @@ Important v2 operating rules:
 
 ## Research Policy
 
-The search priority in v2 is:
+The search priority in v3 is:
 
 1. factor family experiments
 2. label family experiments

@@ -25,6 +25,7 @@ dev/
 # Results file
 results.tsv
 run.json
+run_state.json
 run.log
 
 # Data

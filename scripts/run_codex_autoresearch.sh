@@ -271,7 +271,7 @@ Complete exactly one full autoresearch iteration:
 1. Inspect git state, run_state.json, results.tsv, run.json, train.py, and the current kept baseline.
 2. If the web research policy applies and web search is available in this Codex mode, do a short research pass.
 3. If web search is unavailable in this mode, note that limitation briefly and continue with the best local hypothesis.
-4. Respect the v2 lane policy: factors first, labels second, strategy-only checks only as rare follow-ups after a new factor or label idea.
+4. Respect the v3 lane policy: factors first, labels second, strategy-only checks only as rare follow-ups after a new factor or label idea.
 5. If the latest keep's direct local neighborhood looks exhausted, do not stop immediately. Within the same daily-data contract, you may explicitly relax the local-search policy and do a broader factor-family pass inside train.py before giving up.
 6. Modify only train.py for exactly one hypothesis that follows the repo policy.
 7. Commit the change.

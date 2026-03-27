@@ -8,7 +8,7 @@ fundamental multi-factor platform. The current scope is narrower:
 - daily A-share mainboard research
 - price/volume/turnover-driven factor families
 - realistic open-price execution alignment
-- fixed Qlib v2 backtest semantics
+- fixed Qlib v3 backtest semantics
 - one mutable experiment file: `train.py`
 
 ## Setup
@@ -38,7 +38,7 @@ To set up a new run, work with the user to:
 - The fixed frequency is daily.
 - Supported fields are `open`, `high`, `low`, `close`, `volume`, `factor`, `turnover_rate`.
 - `vwap` is out of scope in this repository version.
-- The backtest version is `qlib_official_daily_v2`.
+- The backtest version is `qlib_official_daily_v3`.
 
 ## Research Positioning
 
@@ -114,9 +114,10 @@ Do not confuse them.
 - `run_state.json`
 - `results.tsv`
 
-The v2 summary includes:
+The v3 summary includes:
 
-- `mean_sharpe` (decision metric: excess-with-cost Sharpe)
+- `mean_sharpe` (decision metric: pool-benchmark excess-with-cost Sharpe)
+- `mean_external_sharpe` (HS300 excess-with-cost Sharpe)
 - `mean_raw_sharpe`
 - `mean_rank_ic`
 - `mean_turnover`
@@ -124,6 +125,7 @@ The v2 summary includes:
 - `mean_annual_return`
 - `mean_excess_annual_return`
 - `mean_benchmark_annual_return`
+- `mean_pool_benchmark_annual_return`
 - `mean_cost_rate`
 - stability diagnostics such as positive RankIC folds and worst-fold Sharpe
 
@@ -151,6 +153,7 @@ The LLM should only judge candidates that survive the harness filters.
 Do not compare results across different `backtest_version` values.
 
 If the backtest version changes, start from a fresh baseline under the new version.
+Do not compare `v1_legacy`, `qlib_official_daily_v2`, and `qlib_official_daily_v3` directly.
 
 ## The Experiment Loop
 
