@@ -96,6 +96,10 @@ TRADE_RETURN_EXPR = "Ref($open, -2) / Ref($open, -1) - 1"
 _QLIB_INITIALIZED_URI: str | None = None
 
 
+class SearchGovernanceError(RuntimeError):
+    """Raised when the candidate violates the repository search policy."""
+
+
 @dataclass(frozen=True)
 class Fold:
     name: str
@@ -190,6 +194,7 @@ class RunSummary:
     llm_category: str | None = None
     final_status: str | None = None
     final_reason: str | None = None
+    finalized: bool = False
     folds: list[FoldMetrics] = field(default_factory=list)
     error: str | None = None
 
@@ -619,6 +624,73 @@ def compute_ratio(current: float, baseline: float) -> float | None:
     return current / baseline
 
 
+def category_from_description(description: str) -> str:
+    description_lower = description.lower()
+    for category in ("factor", "label", "model", "strategy", "baseline"):
+        if f"[{category}]" in description_lower:
+            return category
+    return "other"
+
+
+def row_category(row: dict[str, Any]) -> str:
+    category = str(row.get("category") or "").strip().lower()
+    return category or category_from_description(str(row.get("description", "")))
+
+
+def version_rows(results_path: Path) -> list[dict[str, str]]:
+    ensure_results_schema()
+    rows = load_results_tsv(results_path)
+    return [row for row in rows if row.get("backtest_version") == BACKTEST_VERSION]
+
+
+def load_results_tsv(results_path: Path) -> list[dict[str, str]]:
+    if not results_path.exists():
+        return []
+    with results_path.open(encoding="utf-8") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def validate_search_governance(spec: ExperimentSpec) -> None:
+    rows = [row for row in version_rows(RESULTS_TSV_PATH) if row.get("status") in {"keep", "discard"}]
+    if not rows:
+        return
+
+    current_fingerprint = experiment_fingerprint(spec)
+    current_category = category_from_description(spec.description)
+    if current_category not in {"model", "strategy"}:
+        return
+
+    latest_finalized_category = row_category(rows[-1])
+    if latest_finalized_category == current_category:
+        if rows[-1].get("experiment_fingerprint") != current_fingerprint:
+            raise SearchGovernanceError(
+                f"Back-to-back {current_category}-only experiments are forbidden in {BACKTEST_VERSION}."
+            )
+
+    keeps = [row for row in rows if row.get("status") == "keep"]
+    latest_keep_category = row_category(keeps[-1]) if keeps else None
+    latest_keep_fingerprint = keeps[-1].get("experiment_fingerprint") if keeps else None
+
+    if latest_keep_fingerprint == current_fingerprint:
+        return
+
+    if current_category == "strategy":
+        strategy_count = sum(row_category(row) == "strategy" for row in rows)
+        if len(rows) < 30 and strategy_count >= 2:
+            raise SearchGovernanceError(
+                f"Strategy-only experiments are capped at 2 during the first 30 {BACKTEST_VERSION} experiments."
+            )
+        if latest_keep_category not in {"factor", "label"}:
+            raise SearchGovernanceError(
+                "Strategy-only experiments require the latest keep in this backtest version to come from a factor or label idea."
+            )
+
+    if current_category == "model" and latest_keep_category not in {"factor", "label"}:
+        raise SearchGovernanceError(
+            "Model-only experiments require the latest keep in this backtest version to come from a factor or label idea."
+        )
+
+
 def evaluate_harness_status(summary: RunSummary) -> str:
     baseline = load_current_baseline()
     if baseline is None:
@@ -815,6 +887,7 @@ def run_experiment(spec: ExperimentSpec) -> RunSummary:
     folds: list[FoldMetrics] = []
 
     try:
+        validate_search_governance(spec)
         provider_uri = get_provider_uri()
         check_provider(provider_uri)
         panel = fetch_panel(spec)
@@ -830,6 +903,19 @@ def run_experiment(spec: ExperimentSpec) -> RunSummary:
         )
         summary.harness_status = evaluate_harness_status(summary)
         summary.status = summary.harness_status
+    except SearchGovernanceError as exc:
+        runtime_seconds = time.perf_counter() - start_time
+        summary = aggregate_summary(
+            spec=spec,
+            folds=folds,
+            runtime_seconds=runtime_seconds,
+            status="hard_reject",
+            error=f"{exc.__class__.__name__}: {exc}",
+        )
+        summary.hard_reject = True
+        summary.hard_reject_reason = "search_governance_violation"
+        summary.harness_decision_reason = "hard_reject"
+        summary.decision_reason = "hard_reject"
     except Exception as exc:
         runtime_seconds = time.perf_counter() - start_time
         error = f"{exc.__class__.__name__}: {exc}"

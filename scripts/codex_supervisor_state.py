@@ -333,6 +333,7 @@ def cmd_finalize_result(repo_root: Path, decision: str, reason: str, category: s
     run_summary["status"] = decision
     run_summary["final_status"] = decision
     run_summary["final_reason"] = reason.strip()
+    run_summary["finalized"] = True
     run_summary["decision_reason"] = reason.strip()
     run_summary["llm_decision"] = decision
     run_summary["llm_decision_reason"] = reason.strip()

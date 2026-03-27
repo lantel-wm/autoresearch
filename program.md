@@ -67,6 +67,7 @@ Hard rules:
 - Do not run back-to-back strategy-only or model-only experiments.
 - Do not do local sweeps on `topk`, `n_drop`, `learning_rate`, `num_leaves`, or `n_estimators`.
 - Every experiment must declare one family-level hypothesis, not a random formula grab-bag.
+- The harness may hard-reject a candidate before training if it violates these lane rules.
 
 ## Family Taxonomy
 
