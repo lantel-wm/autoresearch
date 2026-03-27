@@ -65,6 +65,7 @@ MIN_POSITIVE_RANKIC_FOLDS = 4
 RESULTS_TSV_PATH = Path("results.tsv")
 RUN_JSON_PATH = Path("run.json")
 RUN_STATE_PATH = Path("run_state.json")
+STATE_HELPER_PATH = Path("scripts/codex_supervisor_state.py")
 
 LEGACY_RESULTS_HEADER = [
     "commit",
@@ -828,6 +829,20 @@ def save_run_state(state: dict[str, Any]) -> None:
     RUN_STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def sync_branch_projection() -> None:
+    if not STATE_HELPER_PATH.exists():
+        return
+    try:
+        subprocess.run(
+            [sys.executable, str(STATE_HELPER_PATH), "sync-branch-state", "--repo-root", "."],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        print(f"branch_sync: warning ({exc})", file=sys.stderr)
+
+
 def update_run_state_after_result(summary: RunSummary) -> None:
     state = load_run_state()
     state["version"] = 1
@@ -934,6 +949,7 @@ def run_experiment(spec: ExperimentSpec) -> RunSummary:
     write_run_json(summary)
     update_run_state_after_result(summary)
     append_results_tsv(summary)
+    sync_branch_projection()
     print_summary(summary)
     return summary
 

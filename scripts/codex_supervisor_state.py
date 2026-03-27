@@ -8,6 +8,13 @@ import json
 import subprocess
 from pathlib import Path
 
+from branch_results import (
+    branch_summary,
+    list_branch_summaries,
+    restore_branch_state,
+    sync_branch_state,
+)
+
 
 NOISE_EXACT = {"results.tsv", "run.json", "run.log", "run_state.json"}
 NOISE_PREFIXES = ("tmp/", ".vscode/")
@@ -215,6 +222,7 @@ def restore_train(repo_root: Path, keep_commit: str) -> bool:
 
 
 def cmd_preflight(repo_root: Path) -> None:
+    restore_result = restore_branch_state(repo_root)
     tracked, untracked = tracked_and_untracked_changes(repo_root)
     keep = latest_keep_row(repo_root / "results.tsv")
     latest = latest_result_row(repo_root / "results.tsv")
@@ -293,6 +301,7 @@ def cmd_preflight(repo_root: Path) -> None:
                 "reason": "restored_train" if restored else "clean",
                 "restored_train": restored,
                 "latest_keep_commit": keep["commit"],
+                "branch_restore_mode": restore_result.get("mode"),
             }
         )
     )
@@ -355,6 +364,7 @@ def cmd_finalize_result(repo_root: Path, decision: str, reason: str, category: s
         }
     )
     save_run_state(repo_root / "run_state.json", state)
+    sync_branch_state(repo_root)
 
     print(
         json.dumps(
@@ -419,16 +429,47 @@ def cmd_record_result(repo_root: Path, required: str | None) -> None:
     else:
         entries[existing] = entry
     save_history(repo_root, history)
+    sync_branch_state(repo_root)
     print(json.dumps(entry))
+
+
+def cmd_sync_branch_state(repo_root: Path) -> None:
+    print(json.dumps(sync_branch_state(repo_root)))
+
+
+def cmd_restore_branch_state(repo_root: Path) -> None:
+    print(json.dumps(restore_branch_state(repo_root)))
+
+
+def cmd_list_branch_summaries(repo_root: Path) -> None:
+    print(json.dumps({"branches": list_branch_summaries(repo_root)}, ensure_ascii=False))
+
+
+def cmd_show_branch_summary(repo_root: Path, branch: str | None) -> None:
+    if not branch:
+        raise SystemExit("--branch is required for show-branch-summary")
+    print(json.dumps(branch_summary(repo_root, branch), ensure_ascii=False))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="State helpers for autoresearch supervisor.")
-    parser.add_argument("command", choices=["preflight", "finalize-result", "record-result"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "preflight",
+            "finalize-result",
+            "record-result",
+            "sync-branch-state",
+            "restore-branch-state",
+            "list-branch-summaries",
+            "show-branch-summary",
+        ],
+    )
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--required-category")
     parser.add_argument("--decision")
     parser.add_argument("--category")
+    parser.add_argument("--branch")
     parser.add_argument("--reason", default="")
     args = parser.parse_args()
 
@@ -444,6 +485,18 @@ def main() -> int:
         return 0
     if args.command == "record-result":
         cmd_record_result(repo_root, args.required_category)
+        return 0
+    if args.command == "sync-branch-state":
+        cmd_sync_branch_state(repo_root)
+        return 0
+    if args.command == "restore-branch-state":
+        cmd_restore_branch_state(repo_root)
+        return 0
+    if args.command == "list-branch-summaries":
+        cmd_list_branch_summaries(repo_root)
+        return 0
+    if args.command == "show-branch-summary":
+        cmd_show_branch_summary(repo_root, args.branch)
         return 0
     return 1
 

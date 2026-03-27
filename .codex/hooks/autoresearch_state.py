@@ -80,6 +80,17 @@ def run_state(root: Path) -> dict:
     path = root / "run_state.json"
     if not path.exists():
         return {}
+
+
+def branch_index(root: Path) -> list[dict]:
+    path = root / "tmp" / "codex_supervisor" / "branch_index.json"
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return payload.get("branches", [])
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -105,7 +116,8 @@ def ledger_counts(root: Path) -> dict[str, int]:
 
 
 def state_lines(root: Path) -> list[str]:
-    lines = [f"Branch: {current_branch(root)}"]
+    current = current_branch(root)
+    lines = [f"Branch: {current}"]
 
     provider = provider_path(root)
     provider_state = "missing" if provider_missing(root) else "ok"
@@ -145,6 +157,20 @@ def state_lines(root: Path) -> list[str]:
             metrics.append(f"runtime={runtime:.1f}s")
         suffix = f" ({', '.join(metrics)})" if metrics else ""
         lines.append(f"Last run: status={status}, description={description}{suffix}")
+
+    branches = branch_index(root)
+    if branches:
+        recent = [item for item in branches if item.get("branch") != current][:3]
+        if recent:
+            lines.append(
+                "Recent branches: "
+                + "; ".join(
+                    f"{item.get('branch')} keep={item.get('latest_keep_commit') or 'n/a'} "
+                    f"final={item.get('latest_finalized_status') or 'n/a'} "
+                    f"count={item.get('result_count', 0)}"
+                    for item in recent
+                )
+            )
 
     return lines
 

@@ -82,6 +82,9 @@ Each run produces:
 - `results.tsv` — compact versioned ledger
 - `run.log` — raw stdout/stderr if you redirected output
 
+The repo root copies above are the **current branch projection**.
+Branch-scoped source-of-truth archives live under `tmp/codex_supervisor/<branch_slug>/`.
+
 The v3 summary includes:
 
 - `mean_sharpe` (decision metric: pool-benchmark excess-with-cost Sharpe)

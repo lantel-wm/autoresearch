@@ -107,6 +107,9 @@ Do not confuse them.
 - `run.json` is the source of truth for the latest experiment metrics.
 - `results.tsv` is the long-term ledger.
 
+At runtime, the repo-root copies are only the **current branch projection**.
+The branch-scoped source of truth is mirrored under `tmp/codex_supervisor/<branch_slug>/`.
+
 ## Output Format
 
 `prepare.py` prints a compact summary and writes:
