@@ -269,24 +269,26 @@ Complete exactly one full autoresearch iteration:
 1. Inspect git state, results.tsv, run.json, run.log, train.py, and the current kept baseline.
 2. If the web research policy applies and web search is available in this Codex mode, do a short research pass.
 3. If web search is unavailable in this mode, note that limitation briefly and continue with the best local hypothesis.
-4. Modify only train.py for exactly one hypothesis that follows the repo policy.
-5. Commit the change.
-6. Run:
+4. If the latest keep's direct local neighborhood looks exhausted, do not stop immediately. Within the same daily-data contract, you may explicitly relax the local-search policy and do a broader factor-mining pass inside train.py before giving up.
+5. Modify only train.py for exactly one hypothesis that follows the repo policy.
+6. Commit the change.
+7. Run:
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
    QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
    conda run -n qlib python train.py > run.log 2>&1
-7. Read run.json or run.log. The harness now emits provisional statuses:
+8. Read run.json or run.log. The harness now emits provisional statuses:
    - candidate: metrics are available and you must decide keep/discard yourself.
    - hard_reject: the run violated a last-resort safety floor; normally discard it.
    - crash: the run failed structurally.
-8. If the harness status is candidate, compare it against the current kept baseline and decide keep/discard yourself. Use the full tradeoff, not a single fixed threshold.
-9. Also decide the experiment category yourself from factor|label|model|strategy|baseline|other.
-10. Finalize the latest provisional result before changing git state:
+9. If the harness status is candidate, compare it against the current kept baseline and decide keep/discard yourself. Use the full tradeoff, not a single fixed threshold.
+10. Also decide the experiment category yourself from factor|label|model|strategy|baseline|other.
+11. Finalize the latest provisional result before changing git state:
    python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --category factor|label|model|strategy|baseline|other --reason "short reason"
-11. If the final decision is keep, keep the commit.
-12. If the final decision is discard, revert to the previous kept commit.
-13. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
-14. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
+12. If the final decision is keep, keep the commit.
+13. If the final decision is discard, revert to the previous kept commit.
+14. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
+15. Only report a concrete blocker after you've also tried at least one broader factor-mining step inside the current daily-data contract and still have no credible next hypothesis.
+16. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
 
 Do not ask whether to continue. The supervisor will launch the next step.
 Do not stop before either finishing one completed iteration or reporting a concrete blocker.

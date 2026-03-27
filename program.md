@@ -77,6 +77,7 @@ The final `keep` / `discard` choice is made by the LLM, not by a fixed threshold
 - Do not run local sweeps on `learning_rate`, `num_leaves`, `n_estimators`, `topk`, `n_drop`, or cost settings unless the immediately preceding kept result came from a new factor or label idea and there is a specific follow-up hypothesis.
 - Keep the current TopkDropout family as the anchor. Limit strategy variation to rare local tweaks around `topk`, `n_drop`, and cost sanity checks.
 - Qlib documents that turnover is directly related to `Drop / K`, so repeated tuning of these knobs is treated as overfitting risk rather than a primary research direction.
+- If the latest keep's direct local neighborhood has mostly been tested and rejected, do not stop merely because the nearest neighbors look exhausted. In that case, explicitly relax the local-search policy and do a broader factor-mining pass inside `train.py`, while still staying inside the existing daily-data contract and landing on one concrete hypothesis per run.
 
 ## Output format
 
@@ -128,9 +129,10 @@ Repeat this cycle:
 1. Look at the git state and current kept baseline.
 2. If built-in web search is enabled and you judge that outside research would materially improve the next choice, do a short research pass and extract 1-3 testable hypotheses.
 3. If built-in web search is disabled in the current Codex mode, note that limitation briefly and continue with the best local hypothesis from the existing repo state.
-4. Modify `train.py` with one experiment idea that follows the Research Priority and Overfitting Guardrails.
-5. Commit the change.
-6. Run:
+4. If the direct local neighborhood around the latest keep looks exhausted, broaden the search before declaring a blocker. Stay within the same daily-data contract, but allow yourself a wider factor-mining pass inside `train.py`.
+5. Modify `train.py` with one experiment idea that follows the Research Priority and Overfitting Guardrails.
+6. Commit the change.
+7. Run:
 
    ```bash
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
@@ -138,19 +140,19 @@ Repeat this cycle:
    conda run -n qlib python train.py > run.log 2>&1
    ```
 
-7. Read the result from `run.json` or grep the summary lines from `run.log`.
-8. If the harness status is `candidate`, compare it against the current kept baseline and decide `keep` or `discard` yourself. Use the full tradeoff, not a single fixed threshold.
-9. Also decide the experiment category yourself from `factor|label|model|strategy|baseline|other`.
-10. Finalize the latest provisional result before changing git state:
+8. Read the result from `run.json` or grep the summary lines from `run.log`.
+9. If the harness status is `candidate`, compare it against the current kept baseline and decide `keep` or `discard` yourself. Use the full tradeoff, not a single fixed threshold.
+10. Also decide the experiment category yourself from `factor|label|model|strategy|baseline|other`.
+11. Finalize the latest provisional result before changing git state:
 
    ```bash
    python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --category factor|label|model|strategy|baseline|other --reason "short reason"
    ```
 
-11. If the final decision is `keep`, keep the commit and advance the branch.
-12. If the final decision is `discard`, revert to the previous kept commit.
-13. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
-14. Move on to the next experiment from the resulting clean state.
+12. If the final decision is `keep`, keep the commit and advance the branch.
+13. If the final decision is `discard`, revert to the previous kept commit.
+14. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
+15. Move on to the next experiment from the resulting clean state.
 
 ## Decision rule
 
@@ -162,6 +164,7 @@ The LLM is the source of truth for the final `keep` / `discard` choice on normal
 - `keep` means the LLM judged that the candidate beat the current kept baseline on the total tradeoff.
 - `discard` means the LLM judged that it did not, or the run violated a hard floor.
 - `crash` means the run failed structurally or exceeded the budget.
+- Exhausting the immediate local neighborhood is not by itself a blocker. Before you report a blocker, try at least one broader factor-mining step that still stays inside the existing daily-data contract.
 
 ## Simplicity criterion
 
