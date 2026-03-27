@@ -203,8 +203,10 @@ latest_results_commit() {
   awk -F '\t' 'NR > 1 { last = $1 } END { print last }' "$repo_root/results.tsv" 2>/dev/null
 }
 
-last_message_has_blocker() {
-  [[ -f "$output_dir/last_message.txt" ]] && grep -Eiq 'concrete blocker|I.?m stopping here because' "$output_dir/last_message.txt"
+last_message_has_structural_blocker() {
+  [[ -f "$output_dir/last_message.txt" ]] && grep -Eiq \
+    'provider is missing|qlib provider is missing|dirty git state|dirty worktree|cannot proceed because the provider is missing|structural blocker' \
+    "$output_dir/last_message.txt"
 }
 
 branch_slug() {
@@ -287,8 +289,9 @@ Complete exactly one full autoresearch iteration:
 12. If the final decision is keep, keep the commit.
 13. If the final decision is discard, revert to the previous kept commit.
 14. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
-15. Only report a concrete blocker after you've also tried at least one broader factor-mining step inside the current daily-data contract and still have no credible next hypothesis.
-16. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
+15. Do not report a blocker just because the nearest local neighborhood looks exhausted. Keep widening the search inside train.py and keep running experiments.
+16. Only report a blocker for a true structural inability to proceed, such as a missing provider or a broken repository state that prevents any experiment from running at all.
+17. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
 
 Do not ask whether to continue. The supervisor will launch the next step.
 Do not stop before either finishing one completed iteration or reporting a concrete blocker.
@@ -415,14 +418,22 @@ while :; do
 
   latest_result_commit="$(latest_results_commit)"
   if [[ "$latest_result_commit" == "$previous_result_commit" ]]; then
-    if last_message_has_blocker; then
-      printf '[%s] concrete blocker reported without a new result row; stopping supervisor loop\n' \
+    if last_message_has_structural_blocker; then
+      printf '[%s] structural blocker reported without a new result row; stopping supervisor loop\n' \
         "$(date '+%Y-%m-%d %H:%M:%S')" >&2
       exit 0
     fi
-    printf '[%s] no new results.tsv row was produced by step %s; stopping supervisor loop\n' \
+    printf '[%s] no new results.tsv row was produced by step %s; forcing another step instead of stopping\n' \
       "$(date '+%Y-%m-%d %H:%M:%S')" "$step" >&2
-    exit 1
+    rm -f "$output_dir/session_signature.txt"
+    local_steps_run=$((local_steps_run + 1))
+    step=$((step + 1))
+    save_branch_step "$current_branch" "$step"
+    if [[ -f "$output_dir/last_message.txt" ]]; then
+      cp "$output_dir/last_message.txt" "$output_dir/step_$(printf '%04d' "$((step - 1))").txt"
+    fi
+    sleep "$sleep_seconds"
+    continue
   fi
 
   printf '%s\n' "$current_signature" > "$output_dir/session_signature.txt"

@@ -235,6 +235,7 @@ Web research is part of the intended workflow, but the agent now decides when it
 - broader A-share factor sources, practitioner posts, and sell-side notes as hypothesis generators
 
 When the latest keep's direct local neighborhood starts looking exhausted, the agent should not stop immediately. The intended behavior is to relax the local-search policy enough to do a broader factor-mining pass inside `train.py`, while still staying inside the same daily-data contract and landing on one concrete hypothesis per run.
+In supervisor mode, this is enforced operationally too: a no-result "blocker" message is treated as a reason to widen the search and try again, not as a normal stopping condition, unless the blocker is truly structural.
 
 Useful references for the agent’s research loop:
 

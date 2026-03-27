@@ -152,7 +152,9 @@ Repeat this cycle:
 12. If the final decision is `keep`, keep the commit and advance the branch.
 13. If the final decision is `discard`, revert to the previous kept commit.
 14. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
-15. Move on to the next experiment from the resulting clean state.
+15. If you find yourself tempted to stop because the latest keep's nearby neighbors are all weak, do not stop. Broaden the search inside `train.py` and keep going.
+16. Only report a blocker for a true structural inability to proceed, such as a missing provider or a broken repository state that prevents any experiment from running.
+17. Move on to the next experiment from the resulting clean state.
 
 ## Decision rule
 
@@ -164,7 +166,7 @@ The LLM is the source of truth for the final `keep` / `discard` choice on normal
 - `keep` means the LLM judged that the candidate beat the current kept baseline on the total tradeoff.
 - `discard` means the LLM judged that it did not, or the run violated a hard floor.
 - `crash` means the run failed structurally or exceeded the budget.
-- Exhausting the immediate local neighborhood is not by itself a blocker. Before you report a blocker, try at least one broader factor-mining step that still stays inside the existing daily-data contract.
+- Exhausting the immediate local neighborhood is not by itself a blocker. Before you report a blocker, broaden the search inside the existing daily-data contract and continue experimenting.
 
 ## Simplicity criterion
 
