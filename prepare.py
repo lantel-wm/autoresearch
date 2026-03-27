@@ -5,7 +5,7 @@ Fixed Qlib harness for autoresearch-style quant experiments.
 - provider validation
 - fold definitions
 - data loading from the local Qlib provider
-- model fitting and backtest evaluation
+- model fitting and Qlib-backed backtest evaluation
 - run summary serialization
 - baseline-relative metrics and last-resort hard rejects
 """
@@ -13,6 +13,8 @@ Fixed Qlib harness for autoresearch-style quant experiments.
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import math
 import os
@@ -29,6 +31,8 @@ import numpy as np
 import pandas as pd
 import qlib
 from qlib.constant import REG_CN
+from qlib.contrib.evaluate import backtest_daily
+from qlib.contrib.strategy import TopkDropoutStrategy
 from qlib.data import D
 
 # Keep matplotlib and similar libraries from trying to write to ~/.matplotlib.
@@ -37,30 +41,49 @@ os.environ.setdefault("MPLCONFIGDIR", str(DEFAULT_MPLCONFIGDIR))
 Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
 TIME_BUDGET_SECONDS = 600
+BACKTEST_VERSION = "qlib_official_daily_v2"
 DEFAULT_PROVIDER_URI = Path("data/qlib_bin_daily_hfq")
 DEFAULT_MARKET = "ashare_mainboard_no_st"
 DEFAULT_BENCHMARK = "SH000300"
 
 DEFAULT_TOPK = 50
 DEFAULT_N_DROP = 5
+DEFAULT_RISK_DEGREE = 0.95
 OPEN_COST = 0.0005
 CLOSE_COST = 0.0015
 MIN_COST = 5.0
 ACCOUNT_SIZE = 1_000_000.0
+TRADE_UNIT = 100
+LIMIT_THRESHOLD = 0.099
 HARD_REJECT_TURNOVER_RATIO = 1.60
 HARD_REJECT_DRAWDOWN_RATIO = 1.35
+MIN_POSITIVE_RANKIC_FOLDS = 4
 
 RESULTS_TSV_PATH = Path("results.tsv")
 RUN_JSON_PATH = Path("run.json")
+RUN_STATE_PATH = Path("run_state.json")
 
-TRADE_RETURN_EXPR = "Ref($open, -2) / Ref($open, -1) - 1"
-RESULTS_HEADER = [
+LEGACY_RESULTS_HEADER = [
     "commit",
     "sharpe",
     "rank_ic",
     "turnover",
     "max_drawdown",
     "status",
+    "description",
+]
+RESULTS_HEADER = [
+    "commit",
+    "backtest_version",
+    "sharpe",
+    "raw_sharpe",
+    "rank_ic",
+    "turnover",
+    "max_drawdown",
+    "status",
+    "category",
+    "baseline_commit",
+    "experiment_fingerprint",
     "description",
 ]
 
@@ -95,10 +118,14 @@ class ExperimentSpec:
 class FoldMetrics:
     fold: str
     sharpe: float
+    raw_sharpe: float
     rank_ic: float
     turnover: float
     max_drawdown: float
     annual_return: float
+    excess_annual_return: float
+    benchmark_annual_return: float
+    cost_rate: float
     num_days: int
 
 
@@ -107,14 +134,27 @@ class RunSummary:
     commit: str
     description: str
     status: str
+    backtest_version: str
     mean_sharpe: float
+    mean_raw_sharpe: float
     mean_rank_ic: float
     mean_turnover: float
     mean_max_drawdown: float
     mean_annual_return: float
+    mean_excess_annual_return: float
+    mean_benchmark_annual_return: float
+    mean_cost_rate: float
+    positive_rank_ic_folds: int
+    positive_sharpe_folds: int
+    worst_fold_sharpe: float
+    fold_sharpe_std: float
     runtime_seconds: float
     provider_uri: str
     market: str
+    benchmark: str
+    feature_fingerprint: str
+    label_fingerprint: str
+    experiment_fingerprint: str
     harness_status: str | None = None
     hard_reject: bool | None = None
     hard_reject_reason: str | None = None
@@ -122,15 +162,20 @@ class RunSummary:
     baseline_commit: str | None = None
     baseline_description: str | None = None
     baseline_sharpe: float | None = None
+    baseline_raw_sharpe: float | None = None
     baseline_rank_ic: float | None = None
     baseline_turnover: float | None = None
     baseline_max_drawdown: float | None = None
     sharpe_delta: float | None = None
+    raw_sharpe_delta: float | None = None
     rank_ic_delta: float | None = None
     turnover_ratio: float | None = None
     max_drawdown_ratio: float | None = None
     llm_decision: str | None = None
     llm_decision_reason: str | None = None
+    llm_category: str | None = None
+    final_status: str | None = None
+    final_reason: str | None = None
     folds: list[FoldMetrics] = field(default_factory=list)
     error: str | None = None
 
@@ -203,15 +248,15 @@ def validate_experiment_spec(spec: ExperimentSpec) -> None:
     if "\t" in spec.description or "\n" in spec.description:
         raise ValueError("Experiment description must be a single TSV-safe line.")
     if spec.model_type != "lgbm":
-        raise ValueError("Only model_type='lgbm' is supported in v1.")
+        raise ValueError("Only model_type='lgbm' is supported in v2.")
     if not spec.feature_expressions:
         raise ValueError("At least one feature expression is required.")
 
     aliases = [alias for _, alias in spec.feature_expressions]
     if len(set(aliases)) != len(aliases):
         raise ValueError("Feature aliases must be unique.")
-    if any(alias in {"label", "trade_return"} for alias in aliases):
-        raise ValueError("Feature aliases cannot reuse reserved names: label, trade_return.")
+    if any(alias == "label" for alias in aliases):
+        raise ValueError("Feature aliases cannot reuse reserved name: label.")
 
     all_expressions = [expr for expr, _ in spec.feature_expressions] + [spec.label_expression]
     if any("vwap" in expr.lower() for expr in all_expressions):
@@ -250,8 +295,8 @@ def fetch_panel(spec: ExperimentSpec) -> pd.DataFrame:
 
     fields = [expr for expr, _ in spec.feature_expressions]
     aliases = [alias for _, alias in spec.feature_expressions]
-    fields.extend([spec.label_expression, TRADE_RETURN_EXPR])
-    aliases.extend(["label", "trade_return"])
+    fields.append(spec.label_expression)
+    aliases.append("label")
 
     start_time = min(fold.train_start for fold in ROLLING_FOLDS)
     end_time = max(fold.test_end for fold in ROLLING_FOLDS)
@@ -288,6 +333,16 @@ def ensure_time_budget(start_time: float) -> None:
         raise TimeoutError(f"Experiment exceeded {TIME_BUDGET_SECONDS} seconds.")
 
 
+def make_signal_series(scored: pd.DataFrame) -> pd.Series:
+    signal = scored["score"].swaplevel().sort_index()
+    signal.index = signal.index.set_names(["datetime", "instrument"])
+    return signal
+
+
+def rank_ic_series(scored: pd.DataFrame) -> pd.Series:
+    return scored.groupby(level="datetime").apply(compute_daily_rank_ic)
+
+
 def run_fold(spec: ExperimentSpec, panel: pd.DataFrame, fold: Fold, start_time: float) -> FoldMetrics:
     ensure_time_budget(start_time)
 
@@ -298,19 +353,18 @@ def run_fold(spec: ExperimentSpec, panel: pd.DataFrame, fold: Fold, start_time: 
 
     train_frame = train_frame.dropna(subset=["label"])
     valid_frame = valid_frame.dropna(subset=["label"])
-    test_frame = test_frame.dropna(subset=["label", "trade_return"])
+    test_frame = test_frame.dropna(subset=["label"])
     if train_frame.empty or valid_frame.empty or test_frame.empty:
         raise RuntimeError(f"{fold.name} has empty train/valid/test slices.")
 
     model = build_model(spec)
-    fit_kwargs: dict[str, Any] = {
-        "X": train_frame[feature_names],
-        "y": train_frame["label"],
-        "eval_set": [(valid_frame[feature_names], valid_frame["label"])],
-        "eval_metric": "l2",
-        "callbacks": [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=0)],
-    }
-    model.fit(**fit_kwargs)
+    model.fit(
+        X=train_frame[feature_names],
+        y=train_frame["label"],
+        eval_set=[(valid_frame[feature_names], valid_frame["label"])],
+        eval_metric="l2",
+        callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=0)],
+    )
     ensure_time_budget(start_time)
 
     model_iteration = getattr(model, "best_iteration_", None) or getattr(model, "n_estimators_", None)
@@ -318,21 +372,55 @@ def run_fold(spec: ExperimentSpec, panel: pd.DataFrame, fold: Fold, start_time: 
     scored = test_frame.copy()
     scored["score"] = predictions
 
-    rank_ic_series = scored.groupby(level="datetime").apply(compute_daily_rank_ic)
-    daily_returns, turnovers = run_topk_dropout_backtest(
-        scored,
+    qlib_signal = make_signal_series(scored)
+    strategy = TopkDropoutStrategy(
+        signal=qlib_signal,
         topk=int(spec.strategy_kwargs.get("topk", DEFAULT_TOPK)),
         n_drop=int(spec.strategy_kwargs.get("n_drop", DEFAULT_N_DROP)),
+        risk_degree=float(spec.strategy_kwargs.get("risk_degree", DEFAULT_RISK_DEGREE)),
+        only_tradable=True,
+        forbid_all_trade_at_limit=True,
     )
+    report_normal, _ = backtest_daily(
+        start_time=fold.test_start,
+        end_time=fold.test_end,
+        strategy=strategy,
+        account=ACCOUNT_SIZE,
+        benchmark=DEFAULT_BENCHMARK,
+        exchange_kwargs={
+            "freq": "day",
+            "codes": DEFAULT_MARKET,
+            "deal_price": "open",
+            "open_cost": OPEN_COST,
+            "close_cost": CLOSE_COST,
+            "min_cost": MIN_COST,
+            "trade_unit": TRADE_UNIT,
+            "limit_threshold": LIMIT_THRESHOLD,
+        },
+    )
+    ensure_time_budget(start_time)
 
+    if report_normal.empty:
+        raise RuntimeError(f"{fold.name} produced empty portfolio metrics.")
+
+    raw_returns = report_normal["return"].astype(float)
+    benchmark_returns = report_normal["bench"].astype(float)
+    cost_rates = report_normal["cost"].astype(float)
+    excess_returns = raw_returns - benchmark_returns - cost_rates
+
+    rank_ic = rank_ic_series(scored)
     return FoldMetrics(
         fold=fold.name,
-        sharpe=compute_sharpe(daily_returns),
-        rank_ic=float(rank_ic_series.mean(skipna=True) or 0.0),
-        turnover=float(turnovers.mean() or 0.0) if not turnovers.empty else 0.0,
-        max_drawdown=compute_max_drawdown(daily_returns),
-        annual_return=compute_annual_return(daily_returns),
-        num_days=int(len(daily_returns)),
+        sharpe=compute_sharpe(excess_returns),
+        raw_sharpe=compute_sharpe(raw_returns),
+        rank_ic=float(rank_ic.mean(skipna=True) or 0.0),
+        turnover=float(report_normal["turnover"].mean() or 0.0),
+        max_drawdown=compute_max_drawdown(raw_returns),
+        annual_return=compute_annual_return(raw_returns),
+        excess_annual_return=compute_annual_return(excess_returns),
+        benchmark_annual_return=compute_annual_return(benchmark_returns),
+        cost_rate=float(cost_rates.mean() or 0.0),
+        num_days=int(len(report_normal)),
     )
 
 
@@ -343,75 +431,6 @@ def compute_daily_rank_ic(day_frame: pd.DataFrame) -> float:
     if usable["score"].nunique() < 2 or usable["label"].nunique() < 2:
         return float("nan")
     return float(usable["score"].corr(usable["label"], method="spearman"))
-
-
-def run_topk_dropout_backtest(
-    frame: pd.DataFrame,
-    *,
-    topk: int,
-    n_drop: int,
-) -> tuple[pd.Series, pd.Series]:
-    records = frame.reset_index()[["instrument", "datetime", "score", "trade_return"]]
-    holdings: list[str] = []
-    previous_weights = pd.Series(dtype=float)
-    daily_returns: list[tuple[pd.Timestamp, float]] = []
-    turnovers: list[tuple[pd.Timestamp, float]] = []
-
-    for date, day in records.groupby("datetime", sort=True):
-        day = day.replace([np.inf, -np.inf], np.nan).dropna(subset=["score", "trade_return"])
-        if day.empty:
-            continue
-        day = day.sort_values(["score", "instrument"], ascending=[False, True])
-        available_scores = dict(zip(day["instrument"], day["score"]))
-
-        if not holdings:
-            target_holdings = day["instrument"].head(topk).tolist()
-        else:
-            weakest_holdings = sorted(holdings, key=lambda inst: available_scores.get(inst, -np.inf))
-            sell_candidates = weakest_holdings[: min(n_drop, len(weakest_holdings))]
-            target_holdings = [
-                instrument
-                for instrument in holdings
-                if instrument not in sell_candidates and instrument in available_scores
-            ]
-            for instrument in day["instrument"]:
-                if instrument not in target_holdings:
-                    target_holdings.append(instrument)
-                if len(target_holdings) >= topk:
-                    break
-
-        if not target_holdings:
-            continue
-
-        day_by_instrument = day.set_index("instrument")
-        target_holdings = [instrument for instrument in target_holdings if instrument in day_by_instrument.index]
-        if not target_holdings:
-            continue
-
-        weight = 1.0 / len(target_holdings)
-        current_weights = pd.Series(weight, index=target_holdings, dtype=float)
-        turnover = 0.5 * current_weights.sub(previous_weights, fill_value=0.0).abs().sum()
-
-        buy_weight = current_weights.sub(previous_weights, fill_value=0.0).clip(lower=0.0).sum()
-        sell_weight = previous_weights.sub(current_weights, fill_value=0.0).clip(lower=0.0).sum()
-        cost = buy_weight * OPEN_COST + sell_weight * CLOSE_COST
-        if buy_weight > 0:
-            cost += MIN_COST / ACCOUNT_SIZE
-        if sell_weight > 0:
-            cost += MIN_COST / ACCOUNT_SIZE
-
-        gross_return = float(day_by_instrument.loc[target_holdings, "trade_return"].mean())
-        net_return = gross_return - cost
-        daily_returns.append((pd.Timestamp(date), net_return))
-        turnovers.append((pd.Timestamp(date), float(turnover)))
-
-        holdings = list(current_weights.index)
-        previous_weights = current_weights
-
-    return (
-        pd.Series({date: value for date, value in daily_returns}, dtype=float).sort_index(),
-        pd.Series({date: value for date, value in turnovers}, dtype=float).sort_index(),
-    )
 
 
 def compute_sharpe(returns: pd.Series) -> float:
@@ -453,6 +472,33 @@ def recency_weighted_mean(values: list[float], folds: list[FoldMetrics]) -> floa
     return float(np.average(values, weights=weights))
 
 
+def fingerprint_payload(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def feature_fingerprint(spec: ExperimentSpec) -> str:
+    return fingerprint_payload(spec.feature_expressions)
+
+
+def label_fingerprint(spec: ExperimentSpec) -> str:
+    return fingerprint_payload(spec.label_expression)
+
+
+def experiment_fingerprint(spec: ExperimentSpec) -> str:
+    return fingerprint_payload(
+        {
+            "features": spec.feature_expressions,
+            "label": spec.label_expression,
+            "model_type": spec.model_type,
+            "model_kwargs": spec.model_kwargs,
+            "strategy_kwargs": spec.strategy_kwargs,
+            "seed": spec.seed,
+            "backtest_version": BACKTEST_VERSION,
+        }
+    )
+
+
 def aggregate_summary(
     *,
     spec: ExperimentSpec,
@@ -465,15 +511,27 @@ def aggregate_summary(
         commit=current_commit_hash(),
         description=spec.description,
         status=status,
-        harness_status=status,
+        backtest_version=BACKTEST_VERSION,
         mean_sharpe=recency_weighted_mean([fold.sharpe for fold in folds], folds),
+        mean_raw_sharpe=recency_weighted_mean([fold.raw_sharpe for fold in folds], folds),
         mean_rank_ic=recency_weighted_mean([fold.rank_ic for fold in folds], folds),
         mean_turnover=recency_weighted_mean([fold.turnover for fold in folds], folds),
         mean_max_drawdown=recency_weighted_mean([fold.max_drawdown for fold in folds], folds),
         mean_annual_return=recency_weighted_mean([fold.annual_return for fold in folds], folds),
+        mean_excess_annual_return=recency_weighted_mean([fold.excess_annual_return for fold in folds], folds),
+        mean_benchmark_annual_return=recency_weighted_mean([fold.benchmark_annual_return for fold in folds], folds),
+        mean_cost_rate=recency_weighted_mean([fold.cost_rate for fold in folds], folds),
+        positive_rank_ic_folds=int(sum(fold.rank_ic > 0 for fold in folds)),
+        positive_sharpe_folds=int(sum(fold.sharpe > 0 for fold in folds)),
+        worst_fold_sharpe=float(min((fold.sharpe for fold in folds), default=0.0)),
+        fold_sharpe_std=float(np.std([fold.sharpe for fold in folds], ddof=0)) if folds else 0.0,
         runtime_seconds=runtime_seconds,
         provider_uri=str(get_provider_uri()),
         market=DEFAULT_MARKET,
+        benchmark=DEFAULT_BENCHMARK,
+        feature_fingerprint=feature_fingerprint(spec),
+        label_fingerprint=label_fingerprint(spec),
+        experiment_fingerprint=experiment_fingerprint(spec),
         folds=folds,
         error=error,
     )
@@ -493,10 +551,13 @@ def current_commit_hash() -> str:
 
 
 def load_current_baseline() -> dict[str, float | str] | None:
+    ensure_results_schema()
     if not RESULTS_TSV_PATH.exists() or RESULTS_TSV_PATH.stat().st_size == 0:
         return None
 
     results = pd.read_csv(RESULTS_TSV_PATH, sep="\t")
+    if "backtest_version" in results.columns:
+        results = results[results["backtest_version"] == BACKTEST_VERSION]
     kept = results[results["status"] == "keep"]
     if kept.empty:
         return None
@@ -506,6 +567,7 @@ def load_current_baseline() -> dict[str, float | str] | None:
         "commit": str(latest["commit"]),
         "description": str(latest["description"]),
         "sharpe": float(latest["sharpe"]),
+        "raw_sharpe": float(latest["raw_sharpe"]) if not pd.isna(latest.get("raw_sharpe")) else float(latest["sharpe"]),
         "rank_ic": float(latest["rank_ic"]),
         "turnover": float(latest["turnover"]),
         "max_drawdown": float(latest["max_drawdown"]),
@@ -521,24 +583,31 @@ def compute_ratio(current: float, baseline: float) -> float | None:
 def evaluate_harness_status(summary: RunSummary) -> str:
     baseline = load_current_baseline()
     if baseline is None:
-        summary.decision_reason = "no_baseline"
+        summary.decision_reason = "no_baseline_for_backtest_version"
         summary.hard_reject = False
         return "candidate"
 
     summary.baseline_commit = str(baseline["commit"])
     summary.baseline_description = str(baseline["description"])
-    summary.baseline_sharpe = baseline["sharpe"]
-    summary.baseline_rank_ic = baseline["rank_ic"]
-    summary.baseline_turnover = baseline["turnover"]
-    summary.baseline_max_drawdown = baseline["max_drawdown"]
-    summary.sharpe_delta = summary.mean_sharpe - baseline["sharpe"]
-    summary.rank_ic_delta = summary.mean_rank_ic - baseline["rank_ic"]
-    summary.turnover_ratio = compute_ratio(summary.mean_turnover, baseline["turnover"])
-    summary.max_drawdown_ratio = compute_ratio(summary.mean_max_drawdown, baseline["max_drawdown"])
+    summary.baseline_sharpe = float(baseline["sharpe"])
+    summary.baseline_raw_sharpe = float(baseline["raw_sharpe"])
+    summary.baseline_rank_ic = float(baseline["rank_ic"])
+    summary.baseline_turnover = float(baseline["turnover"])
+    summary.baseline_max_drawdown = float(baseline["max_drawdown"])
+    summary.sharpe_delta = summary.mean_sharpe - summary.baseline_sharpe
+    summary.raw_sharpe_delta = summary.mean_raw_sharpe - summary.baseline_raw_sharpe
+    summary.rank_ic_delta = summary.mean_rank_ic - summary.baseline_rank_ic
+    summary.turnover_ratio = compute_ratio(summary.mean_turnover, summary.baseline_turnover)
+    summary.max_drawdown_ratio = compute_ratio(summary.mean_max_drawdown, summary.baseline_max_drawdown)
 
     if summary.mean_rank_ic <= 0.0:
         summary.hard_reject = True
         summary.hard_reject_reason = "rankic_nonpositive"
+        summary.decision_reason = "hard_reject"
+        return "hard_reject"
+    if summary.positive_rank_ic_folds < MIN_POSITIVE_RANKIC_FOLDS:
+        summary.hard_reject = True
+        summary.hard_reject_reason = "rankic_fold_instability"
         summary.decision_reason = "hard_reject"
         return "hard_reject"
     if summary.turnover_ratio is not None and summary.turnover_ratio > HARD_REJECT_TURNOVER_RATIO:
@@ -557,53 +626,134 @@ def evaluate_harness_status(summary: RunSummary) -> str:
     return "candidate"
 
 
-def ensure_results_header() -> None:
-    if RESULTS_TSV_PATH.exists():
+def ensure_results_schema() -> None:
+    if not RESULTS_TSV_PATH.exists():
+        RESULTS_TSV_PATH.write_text("\t".join(RESULTS_HEADER) + "\n", encoding="utf-8")
         return
-    RESULTS_TSV_PATH.write_text("\t".join(RESULTS_HEADER) + "\n", encoding="utf-8")
+
+    with RESULTS_TSV_PATH.open(encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fieldnames = reader.fieldnames or []
+        if fieldnames == RESULTS_HEADER:
+            return
+        rows = list(reader)
+
+    migrated_rows: list[dict[str, str]] = []
+    for row in rows:
+        migrated_rows.append(
+            {
+                "commit": row.get("commit", ""),
+                "backtest_version": row.get("backtest_version", "v1_legacy"),
+                "sharpe": row.get("sharpe", ""),
+                "raw_sharpe": row.get("raw_sharpe", row.get("sharpe", "")),
+                "rank_ic": row.get("rank_ic", ""),
+                "turnover": row.get("turnover", ""),
+                "max_drawdown": row.get("max_drawdown", ""),
+                "status": row.get("status", ""),
+                "category": row.get("category", ""),
+                "baseline_commit": row.get("baseline_commit", ""),
+                "experiment_fingerprint": row.get("experiment_fingerprint", ""),
+                "description": row.get("description", ""),
+            }
+        )
+
+    with RESULTS_TSV_PATH.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=RESULTS_HEADER, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(migrated_rows)
 
 
 def append_results_tsv(summary: RunSummary) -> None:
-    ensure_results_header()
-    row = [
-        summary.commit,
-        f"{summary.mean_sharpe:.6f}",
-        f"{summary.mean_rank_ic:.6f}",
-        f"{summary.mean_turnover:.6f}",
-        f"{summary.mean_max_drawdown:.6f}",
-        summary.status,
-        sanitize_tsv_field(summary.description),
-    ]
-    with RESULTS_TSV_PATH.open("a", encoding="utf-8") as handle:
-        handle.write("\t".join(row) + "\n")
+    ensure_results_schema()
+    row = {
+        "commit": summary.commit,
+        "backtest_version": summary.backtest_version,
+        "sharpe": f"{summary.mean_sharpe:.6f}",
+        "raw_sharpe": f"{summary.mean_raw_sharpe:.6f}",
+        "rank_ic": f"{summary.mean_rank_ic:.6f}",
+        "turnover": f"{summary.mean_turnover:.6f}",
+        "max_drawdown": f"{summary.mean_max_drawdown:.6f}",
+        "status": summary.status,
+        "category": summary.llm_category or "",
+        "baseline_commit": summary.baseline_commit or "",
+        "experiment_fingerprint": summary.experiment_fingerprint,
+        "description": sanitize_tsv_field(summary.description),
+    }
+    with RESULTS_TSV_PATH.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=RESULTS_HEADER, delimiter="\t")
+        writer.writerow(row)
 
 
 def sanitize_tsv_field(value: str) -> str:
     return value.replace("\t", " ").replace("\n", " ").strip()
 
 
+def load_run_state() -> dict[str, Any]:
+    if not RUN_STATE_PATH.exists():
+        return {
+            "version": 1,
+            "phase": "idle",
+            "backtest_version": BACKTEST_VERSION,
+            "latest_keep_commit": None,
+            "latest_finalized_commit": None,
+            "latest_finalized_status": None,
+            "current_candidate_commit": None,
+            "current_head_commit": current_commit_hash(),
+        }
+    return json.loads(RUN_STATE_PATH.read_text(encoding="utf-8"))
+
+
+def save_run_state(state: dict[str, Any]) -> None:
+    RUN_STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def update_run_state_after_result(summary: RunSummary) -> None:
+    state = load_run_state()
+    state["version"] = 1
+    state["backtest_version"] = summary.backtest_version
+    state["current_head_commit"] = summary.commit
+    state["latest_description"] = summary.description
+    if summary.status in {"candidate", "hard_reject"}:
+        state["phase"] = "candidate_recorded"
+        state["current_candidate_commit"] = summary.commit
+    else:
+        state["phase"] = "finalized_crash"
+        state["current_candidate_commit"] = None
+        state["latest_finalized_commit"] = summary.commit
+        state["latest_finalized_status"] = summary.status
+    save_run_state(state)
+
+
 def write_run_json(summary: RunSummary) -> None:
-    RUN_JSON_PATH.write_text(json.dumps(asdict(summary), indent=2, ensure_ascii=False), encoding="utf-8")
+    RUN_JSON_PATH.write_text(json.dumps(asdict(summary), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def print_summary(summary: RunSummary) -> None:
     print("---")
-    print(f"status:           {summary.status}")
+    print(f"status:                 {summary.status}")
+    print(f"backtest_version:       {summary.backtest_version}")
     if summary.decision_reason:
-        print(f"decision_reason:  {summary.decision_reason}")
+        print(f"decision_reason:        {summary.decision_reason}")
     if summary.hard_reject is not None:
-        print(f"hard_reject:      {str(summary.hard_reject).lower()}")
+        print(f"hard_reject:            {str(summary.hard_reject).lower()}")
     if summary.hard_reject_reason:
-        print(f"hard_reject_reason:{summary.hard_reject_reason}")
-    print(f"mean_sharpe:      {summary.mean_sharpe:.6f}")
-    print(f"mean_rank_ic:     {summary.mean_rank_ic:.6f}")
-    print(f"mean_turnover:    {summary.mean_turnover:.6f}")
-    print(f"mean_max_drawdown:{summary.mean_max_drawdown:.6f}")
-    print(f"mean_annual_return:{summary.mean_annual_return:.6f}")
-    print(f"runtime_seconds:  {summary.runtime_seconds:.1f}")
-    print(f"description:      {summary.description}")
+        print(f"hard_reject_reason:     {summary.hard_reject_reason}")
+    print(f"mean_sharpe:            {summary.mean_sharpe:.6f}")
+    print(f"mean_raw_sharpe:        {summary.mean_raw_sharpe:.6f}")
+    print(f"mean_rank_ic:           {summary.mean_rank_ic:.6f}")
+    print(f"mean_turnover:          {summary.mean_turnover:.6f}")
+    print(f"mean_max_drawdown:      {summary.mean_max_drawdown:.6f}")
+    print(f"mean_annual_return:     {summary.mean_annual_return:.6f}")
+    print(f"mean_excess_annual_ret: {summary.mean_excess_annual_return:.6f}")
+    print(f"mean_benchmark_return:  {summary.mean_benchmark_annual_return:.6f}")
+    print(f"mean_cost_rate:         {summary.mean_cost_rate:.6f}")
+    print(f"positive_rank_ic_folds: {summary.positive_rank_ic_folds}")
+    print(f"worst_fold_sharpe:      {summary.worst_fold_sharpe:.6f}")
+    print(f"fold_sharpe_std:        {summary.fold_sharpe_std:.6f}")
+    print(f"runtime_seconds:        {summary.runtime_seconds:.1f}")
+    print(f"description:            {summary.description}")
     if summary.error:
-        print(f"error:            {summary.error}")
+        print(f"error:                  {summary.error}")
 
 
 def run_experiment(spec: ExperimentSpec) -> RunSummary:
@@ -641,6 +791,7 @@ def run_experiment(spec: ExperimentSpec) -> RunSummary:
         summary.hard_reject = False
 
     write_run_json(summary)
+    update_run_state_after_result(summary)
     append_results_tsv(summary)
     print_summary(summary)
     return summary

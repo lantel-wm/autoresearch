@@ -67,7 +67,7 @@ def main() -> int:
     if stop_hook_active:
         reason = (
             "Do not stop. Continue the autoresearch loop from the current repository state. "
-            "Use git state, results.tsv, run.json, run.log, and train.py to choose the next "
+            "Use git state, run_state.json, results.tsv, run.json, and train.py to choose the next "
             "concrete experiment action."
         )
     else:
@@ -75,7 +75,7 @@ def main() -> int:
             "Continue the autoresearch experiment loop instead of stopping.\n"
             f"{state_block(root)}\n"
             "Next-step policy:\n"
-            "- Inspect git state, results.tsv, run.json, run.log, and train.py.\n"
+            "- Inspect git state, run_state.json, results.tsv, run.json, and train.py.\n"
             "- If the last run finished, choose the next single hypothesis and execute it.\n"
             "- If the last run crashed, fix it once if the issue is trivial and the idea still makes sense; otherwise move on.\n"
             "- Only stop if there is a concrete blocker that truly requires human intervention."

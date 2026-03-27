@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 
-NOISE_EXACT = {"results.tsv", "run.json", "run.log"}
+NOISE_EXACT = {"results.tsv", "run.json", "run.log", "run_state.json"}
 NOISE_PREFIXES = ("tmp/", ".vscode/")
 LLM_CATEGORIES = {"factor", "label", "model", "strategy", "baseline", "other"}
 
@@ -32,12 +32,12 @@ def load_results(results_path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
-def rewrite_latest_result_status(results_path: Path, commit: str, status: str) -> None:
+def rewrite_latest_result(results_path: Path, commit: str, updates: dict[str, str]) -> None:
     rows = load_results(results_path)
     if not rows or rows[-1]["commit"] != commit:
         return
-    rows[-1]["status"] = status
-    fieldnames = rows[0].keys()
+    rows[-1].update(updates)
+    fieldnames = list(rows[0].keys())
     with results_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
@@ -46,7 +46,7 @@ def rewrite_latest_result_status(results_path: Path, commit: str, status: str) -
 
 def latest_keep_row(results_path: Path) -> dict[str, str] | None:
     rows = load_results(results_path)
-    keeps = [row for row in rows if row["status"] == "keep"]
+    keeps = [row for row in rows if row.get("status") == "keep"]
     return keeps[-1] if keeps else None
 
 
@@ -63,6 +63,23 @@ def load_run_summary(run_json_path: Path) -> dict:
 
 def save_run_summary(run_json_path: Path, payload: dict) -> None:
     run_json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def load_run_state(path: Path) -> dict:
+    if not path.exists():
+        return {
+            "version": 1,
+            "phase": "idle",
+            "latest_keep_commit": None,
+            "latest_finalized_commit": None,
+            "latest_finalized_status": None,
+            "current_candidate_commit": None,
+        }
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_run_state(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def normalize_llm_category(category: str) -> str:
@@ -128,6 +145,10 @@ def classify_experiment(repo_root: Path, description: str, commit: str) -> str:
 
 
 def resolve_latest_category(repo_root: Path, latest: dict[str, str]) -> tuple[str, str]:
+    row_category = (latest.get("category") or "").strip().lower()
+    if row_category:
+        return normalize_llm_category(row_category), "row"
+
     run_json_path = repo_root / "run.json"
     if run_json_path.exists():
         run_summary = load_run_summary(run_json_path)
@@ -145,7 +166,9 @@ def history_path(repo_root: Path) -> Path:
 def bootstrap_history(repo_root: Path) -> dict:
     entries = []
     for row in load_results(repo_root / "results.tsv"):
-        category = classify_experiment(repo_root, row["description"], row["commit"])
+        category = (row.get("category") or "").strip().lower() or classify_experiment(
+            repo_root, row["description"], row["commit"]
+        )
         if category == "baseline":
             continue
         valid = row["status"] in {"keep", "discard"} and category != "baseline"
@@ -155,11 +178,13 @@ def bootstrap_history(repo_root: Path) -> dict:
                 "description": row["description"],
                 "status": row["status"],
                 "category": category,
+                "backtest_version": row.get("backtest_version", ""),
+                "experiment_fingerprint": row.get("experiment_fingerprint", ""),
                 "valid": valid,
                 "valid_reason": "bootstrap" if valid else f"bootstrap_{row['status']}",
             }
         )
-    return {"version": 1, "entries": entries}
+    return {"version": 2, "entries": entries}
 
 
 def load_or_bootstrap_history(repo_root: Path) -> dict:
@@ -192,6 +217,34 @@ def restore_train(repo_root: Path, keep_commit: str) -> bool:
 def cmd_preflight(repo_root: Path) -> None:
     tracked, untracked = tracked_and_untracked_changes(repo_root)
     keep = latest_keep_row(repo_root / "results.tsv")
+    latest = latest_result_row(repo_root / "results.tsv")
+    state = load_run_state(repo_root / "run_state.json")
+
+    if latest is not None and latest["status"] in {"candidate", "hard_reject"}:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "reason": "pending_finalize",
+                    "details": latest["commit"],
+                    "latest_keep_commit": keep["commit"] if keep else None,
+                }
+            )
+        )
+        return
+    if state.get("phase") == "candidate_recorded":
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "reason": "run_state_pending_candidate",
+                    "details": state.get("current_candidate_commit"),
+                    "latest_keep_commit": keep["commit"] if keep else None,
+                }
+            )
+        )
+        return
+
     if keep is None:
         print(json.dumps({"ok": True, "reason": "no_baseline", "restored_train": False}))
         return
@@ -223,6 +276,16 @@ def cmd_preflight(repo_root: Path) -> None:
         return
 
     restored = restore_train(repo_root, keep["commit"])
+    state.update(
+        {
+            "version": 1,
+            "phase": "idle_at_keep",
+            "latest_keep_commit": keep["commit"],
+            "current_candidate_commit": None,
+            "current_head_commit": git(repo_root, "rev-parse", "--short", "HEAD"),
+        }
+    )
+    save_run_state(repo_root / "run_state.json", state)
     print(
         json.dumps(
             {
@@ -255,16 +318,38 @@ def cmd_finalize_result(repo_root: Path, decision: str, reason: str, category: s
     if latest_status in {"keep", "discard"} and latest_status != decision:
         raise SystemExit(f"Latest result is already finalized as {latest_status}")
 
-    rewrite_latest_result_status(results_path, latest["commit"], decision)
+    rewrite_latest_result(
+        results_path,
+        latest["commit"],
+        {"status": decision, "category": normalized_category},
+    )
 
     run_summary = load_run_summary(repo_root / "run.json")
     prior_status = str(run_summary.get("status", latest_status))
     run_summary["harness_status"] = run_summary.get("harness_status") or prior_status
     run_summary["status"] = decision
+    run_summary["final_status"] = decision
+    run_summary["final_reason"] = reason.strip()
     run_summary["llm_decision"] = decision
     run_summary["llm_decision_reason"] = reason.strip()
     run_summary["llm_category"] = normalized_category
     save_run_summary(repo_root / "run.json", run_summary)
+
+    state = load_run_state(repo_root / "run_state.json")
+    keep = latest_keep_row(results_path)
+    state.update(
+        {
+            "version": 1,
+            "phase": f"finalized_{decision}",
+            "latest_finalized_commit": latest["commit"],
+            "latest_finalized_status": decision,
+            "latest_category": normalized_category,
+            "current_candidate_commit": None,
+            "latest_keep_commit": keep["commit"] if keep else state.get("latest_keep_commit"),
+            "current_head_commit": git(repo_root, "rev-parse", "--short", "HEAD"),
+        }
+    )
+    save_run_state(repo_root / "run_state.json", state)
 
     print(
         json.dumps(
@@ -309,6 +394,8 @@ def cmd_record_result(repo_root: Path, required: str | None) -> None:
         "status": latest["status"],
         "category": category,
         "category_source": category_source,
+        "backtest_version": latest.get("backtest_version", ""),
+        "experiment_fingerprint": latest.get("experiment_fingerprint", ""),
         "valid": valid,
         "valid_reason": (
             "ok"

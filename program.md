@@ -1,138 +1,166 @@
 # autoresearch
 
-This repository is an experiment in autonomous quant research.
+This repository is an experiment in autonomous A-share daily trading-alpha research.
+
+It is **not** a general-purpose production trading stack and **not** a full cross-sectional
+fundamental multi-factor platform. The current scope is narrower:
+
+- daily A-share mainboard research
+- price/volume/turnover-driven factor families
+- realistic open-price execution alignment
+- fixed Qlib v2 backtest semantics
+- one mutable experiment file: `train.py`
 
 ## Setup
 
 To set up a new run, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date, e.g. `mar23`. The branch `autoresearch/<tag>` must not already exist.
-2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current main branch.
-3. **Read the in-scope files**:
-   - `README.md` for repository context.
-   - `prepare.py` for the fixed Qlib harness. Do not modify this file during the loop.
-   - `train.py` for the experiment definition. This is the only file you edit during experiments.
-4. **Verify the provider exists**: the default provider path is `data/qlib_bin_daily_hfq`. If it does not exist, either tell the human to copy it into this worktree or set `QLIB_PROVIDER_URI` explicitly.
-5. **Verify the runtime**: run `MPLCONFIGDIR=$PWD/tmp/mplconfig QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} conda run -n qlib python prepare.py --check`.
-6. **Initialize results tracking**: `results.tsv` is created automatically on the first run. It stays untracked.
-7. **Confirm and go**: once setup is clean, start the baseline run.
+1. Agree on a run tag such as `mar27`.
+2. Create `autoresearch/<tag>` from the current main branch.
+3. Read `README.md`, `prepare.py`, `train.py`, and this file.
+4. Verify the provider exists at `data/qlib_bin_daily_hfq` or set `QLIB_PROVIDER_URI`.
+5. Verify runtime with:
 
-## Experimentation
+   ```bash
+   MPLCONFIGDIR=$PWD/tmp/mplconfig \
+   QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
+   conda run -n qlib python prepare.py --check
+   ```
 
-Each experiment runs in the local `qlib` conda environment. The fixed harness in `prepare.py` evaluates a candidate on five rolling yearly folds and enforces a hard wall-clock budget of 10 minutes.
-It computes metrics, baseline-relative deltas, and last-resort hard rejects.
-The final `keep` / `discard` choice is made by the LLM, not by a fixed threshold block in the harness.
+6. Inspect `run_state.json`, `run.json`, and `results.tsv` before the first experiment step.
 
-**What you CAN do:**
+## Experimentation Contract
+
 - Modify `train.py` only.
-- Choose the next experiment direction adaptively from factors, labels, model config, and small strategy tweaks.
-- Use web research to source factor ideas, label ideas, and implementation clues, following the Web Research Policy below.
-- Change factor expressions, realistic label variants, model hyperparameters, and small strategy knobs inside `train.py`, but keep the current harness interface unchanged.
+- Keep `prepare.py` read-only during the loop.
+- Run everything in the local `qlib` conda environment.
+- The fixed market is `ashare_mainboard_no_st`.
+- The fixed frequency is daily.
+- Supported fields are `open`, `high`, `low`, `close`, `volume`, `factor`, `turnover_rate`.
+- `vwap` is out of scope in this repository version.
+- The backtest version is `qlib_official_daily_v2`.
 
-**What you CANNOT do:**
-- Modify `prepare.py` during the loop. It owns the evaluation harness and the hard safety floors.
-- Install new packages.
-- Add `vwap`-dependent factors.
-- Change the market, data source contract, or evaluation fold definitions during the loop.
-- Run broad grid searches or repeated local parameter sweeps on model or strategy settings.
+## Research Positioning
 
-## Fixed contract
+Treat this repo as a **daily trading-alpha** workflow.
 
-- Market: `ashare_mainboard_no_st`
-- Frequency: daily
-- Input fields: `open`, `high`, `low`, `close`, `volume`, `factor`, `turnover_rate`
-- Label family: default 5-day forward return, but realistic execution-aligned future-return variants are allowed inside the current single `label_expression` interface
-- Strategy family: long-only TopK with dropout, with strategy redesign out of scope
-- Runtime: `conda run -n qlib`
+That means:
 
-## Research Priority
+- prioritize overnight/intraday, low-risk, liquidity, behavioral, and trend-alignment families
+- do not pretend this is a full valuation/quality/size factor platform unless the data contract expands
+- evaluate ideas as trading signals first, not as broad economic factor claims
 
-- The default search order is: `factors > labels > model config > small strategy tweaks`.
-- Treat that order as a prior, not a hard quota. You may shift direction when recent results imply the current search lane is saturated or when another lane has a clearer hypothesis.
-- A factor-focused experiment must add, replace, or reorganize a coherent factor family or feature interaction set. Do not count a single random extra column as factor research.
-- Model-only and strategy-only experiments are allowed only as small follow-up checks after stronger factor or label ideas, not as the main search path.
+## Search Governance
+
+The default lane order is:
+
+1. factor family experiments
+2. label family experiments
+3. rare model follow-up checks
+4. rare strategy follow-up checks
+
+Hard rules:
+
+- Strategy-only experiments are frozen by default.
+- Do not run a strategy-only experiment unless the immediately preceding kept result came from a new factor or label idea.
+- In the first 30 experiments of a new backtest version, strategy-only experiments may appear at most twice.
+- Do not run back-to-back strategy-only or model-only experiments.
+- Do not do local sweeps on `topk`, `n_drop`, `learning_rate`, `num_leaves`, or `n_estimators`.
+- Every experiment must declare one family-level hypothesis, not a random formula grab-bag.
+
+## Family Taxonomy
+
+Use one of these family tags in the description and reasoning:
+
+- `overnight_gap`
+- `lowrisk_liquidity`
+- `behavioral_trading`
+- `trend_alignment`
+- `label_decomposition`
+- `model_followup`
+- `strategy_followup`
+
+Descriptions should stay short and TSV-safe, but should still reveal the family and source, for example:
+
+- `[factor][paper] overnight_gap gaptrend_align55`
+- `[label][local] label_decomposition open467_component_cap30_top7`
 
 ## Web Research Policy
 
-- If built-in web search is available, decide for yourself when a research pass is worth doing. Triggers include the first non-baseline experiment, search stagnation, repeated discards, or uncertainty about the next direction.
-- Search scope is not limited to Qlib. You may use any relevant A-share factor source you can find, including:
-  1. Official Qlib docs/examples and Microsoft Qlib or RD-Agent material.
-  2. Papers and working papers on A-share factors, overnight/intraday effects, liquidity, volatility, and label design.
-  3. Qlib GitHub examples/issues and broader quant implementation references.
-  4. Sell-side, practitioner, forum, and blog discussions on A-share factor ideas, treated as hypothesis generators rather than evidence.
-- Treat docs, papers, and implementation references as stronger evidence. Treat broader web content as tentative until validated locally by the fixed harness.
-- If an experiment is externally inspired, start its description with compact tags such as `[factor][paper]`, `[label][docs]`, `[model][issue]`, or `[strategy][web]`.
+- Prefer official Qlib docs, Microsoft Qlib / RD-Agent material, and papers.
+- Treat blogs, forums, and practitioner posts as hypothesis generators only.
+- If an experiment is externally inspired, keep compact tags like `[factor][paper]` or `[label][docs]`.
+- Search for family-level evidence first, then map it into one concrete expression or label change.
 
-## Label Policy
+## State Files
 
-- The default label is a 5D forward return, but you may test realistic execution-aligned future-return variants.
-- Allowed label changes are limited to what fits the current single `label_expression` interface in `train.py`.
-- Valid directions include nearby horizons, open/close execution-aligned return bases, weighted horizon blends, and simple volatility-scaled or capped variants when expressible in the current formula language.
-- Do not use lookahead labels, unavailable fields, or label ideas that would require new preprocessing, neutralization, or harness logic in this pass.
+Three files matter and they have different meanings:
 
-## Overfitting Guardrails
+- `run_state.json`: current workflow state, including keep/finalized/candidate semantics
+- `run.json`: latest experiment summary
+- `results.tsv`: compact ledger across all historical experiments
 
-- Prefer new factor families, feature interactions, and label designs over hyperparameter tuning, but choose the lane that currently has the clearest next hypothesis.
-- Do not run back-to-back model-only experiments or back-to-back strategy-only experiments.
-- Do not run local sweeps on `learning_rate`, `num_leaves`, `n_estimators`, `topk`, `n_drop`, or cost settings unless the immediately preceding kept result came from a new factor or label idea and there is a specific follow-up hypothesis.
-- Keep the current TopkDropout family as the anchor. Limit strategy variation to rare local tweaks around `topk`, `n_drop`, and cost sanity checks.
-- Qlib documents that turnover is directly related to `Drop / K`, so repeated tuning of these knobs is treated as overfitting risk rather than a primary research direction.
-- If the latest keep's direct local neighborhood has mostly been tested and rejected, do not stop merely because the nearest neighbors look exhausted. In that case, explicitly relax the local-search policy and do a broader factor-mining pass inside `train.py`, while still staying inside the existing daily-data contract and landing on one concrete hypothesis per run.
+Do not confuse them.
 
-## Output format
+- `run_state.json` is the source of truth for whether the repo is idle, has a pending candidate, or has already finalized the latest run.
+- `run.json` is the source of truth for the latest experiment metrics.
+- `results.tsv` is the long-term ledger.
 
-At the end of each run, the harness prints:
+## Output Format
 
-```text
----
-status:           candidate|hard_reject|crash
-mean_sharpe:      ...
-mean_rank_ic:     ...
-mean_turnover:    ...
-mean_max_drawdown:...
-mean_annual_return:...
-runtime_seconds:  ...
-description:      ...
-```
+`prepare.py` prints a compact summary and writes:
 
-It also writes:
+- `run.json`
+- `run_state.json`
+- `results.tsv`
 
-- `run.json` with the full machine-readable summary
-- `results.tsv` with the compact experiment ledger
+The v2 summary includes:
 
-Immediately after `train.py` finishes, those are provisional:
+- `mean_sharpe` (decision metric: excess-with-cost Sharpe)
+- `mean_raw_sharpe`
+- `mean_rank_ic`
+- `mean_turnover`
+- `mean_max_drawdown`
+- `mean_annual_return`
+- `mean_excess_annual_return`
+- `mean_benchmark_annual_return`
+- `mean_cost_rate`
+- stability diagnostics such as positive RankIC folds and worst-fold Sharpe
 
-- `candidate` means the run is structurally valid and the LLM must decide `keep` or `discard`.
-- `hard_reject` means the run violated a last-resort safety floor such as non-positive RankIC or an extreme turnover / drawdown blowup.
-- `crash` means the run failed structurally.
+## Decision Rule
 
-During autonomous runs, the supervisor rewrites the latest row and `run.json` to the final `keep` / `discard` status after the LLM judges the tradeoff.
+The harness owns:
 
-## Logging results
+- metrics
+- backtest semantics
+- backtest versioning
+- hard reject rules
 
-The TSV has seven columns:
+The LLM owns:
 
-```text
-commit	sharpe	rank_ic	turnover	max_drawdown	status	description
-```
+- final `keep` / `discard`
+- experiment category
+- short decision reason
 
-`results.tsv` stays untracked by git.
+The LLM should only judge candidates that survive the harness filters.
 
-If the idea is externally inspired, begin the description with compact evidence tags such as `[factor][paper]` or `[label][docs]`. Keep descriptions short and TSV-safe.
+## Logging Results
 
-## The experiment loop
+`results.tsv` stays untracked by git and is now versioned by `backtest_version`.
 
-The experiment runs on a dedicated branch such as `autoresearch/mar23`.
+Do not compare results across different `backtest_version` values.
+
+If the backtest version changes, start from a fresh baseline under the new version.
+
+## The Experiment Loop
 
 Repeat this cycle:
 
-1. Look at the git state and current kept baseline.
-2. If built-in web search is enabled and you judge that outside research would materially improve the next choice, do a short research pass and extract 1-3 testable hypotheses.
-3. If built-in web search is disabled in the current Codex mode, note that limitation briefly and continue with the best local hypothesis from the existing repo state.
-4. If the direct local neighborhood around the latest keep looks exhausted, broaden the search before declaring a blocker. Stay within the same daily-data contract, but allow yourself a wider factor-mining pass inside `train.py`.
-5. Modify `train.py` with one experiment idea that follows the Research Priority and Overfitting Guardrails.
-6. Commit the change.
-7. Run:
+1. Inspect `git` state, `run_state.json`, `results.tsv`, `run.json`, and `train.py`.
+2. If web research is useful, do a short family-level research pass.
+3. Modify `train.py` for exactly one hypothesis.
+4. Commit the change.
+5. Run:
 
    ```bash
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
@@ -140,44 +168,33 @@ Repeat this cycle:
    conda run -n qlib python train.py > run.log 2>&1
    ```
 
-8. Read the result from `run.json` or grep the summary lines from `run.log`.
-9. If the harness status is `candidate`, compare it against the current kept baseline and decide `keep` or `discard` yourself. Use the full tradeoff, not a single fixed threshold.
-10. Also decide the experiment category yourself from `factor|label|model|strategy|baseline|other`.
-11. Finalize the latest provisional result before changing git state:
+6. Read `run.json` first. Do not use raw `run.log` as a primary decision input.
+7. If `status` is `candidate`, compare it against the current kept baseline in the same `backtest_version`.
+8. Finalize with:
 
    ```bash
-   python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --category factor|label|model|strategy|baseline|other --reason "short reason"
+   python3 scripts/codex_supervisor_state.py finalize-result \
+     --repo-root . \
+     --decision keep|discard \
+     --category factor|label|model|strategy|baseline|other \
+     --reason "short reason"
    ```
 
-12. If the final decision is `keep`, keep the commit and advance the branch.
-13. If the final decision is `discard`, revert to the previous kept commit.
-14. If `status: crash`, read the traceback in `run.log`, fix obvious bugs if the idea still makes sense, otherwise log it and move on.
-15. If you find yourself tempted to stop because the latest keep's nearby neighbors are all weak, do not stop. Broaden the search inside `train.py` and keep going.
-16. Only report a blocker for a true structural inability to proceed, such as a missing provider or a broken repository state that prevents any experiment from running.
-17. Move on to the next experiment from the resulting clean state.
+9. If the final decision is `keep`, keep the commit.
+10. If the final decision is `discard`, revert to the previous kept `train.py` state.
+11. Leave the repository in an idle state that is ready for the next iteration.
 
-## Decision rule
+## Crash Handling
 
-The harness is the source of truth for metrics, baselines, and last-resort safety floors.
-The LLM is the source of truth for the final `keep` / `discard` choice on normal candidates.
+- Prefer the structured `error` field in `run.json`.
+- Only inspect raw traceback from `run.log` if the structured error is insufficient.
+- If the crash is trivial and the hypothesis still makes sense, fix and rerun once.
+- Otherwise discard and move on.
 
-- `candidate` means the run is structurally valid and needs LLM judgment.
-- `hard_reject` means the run failed a last-resort safety floor and should normally be discarded.
-- `keep` means the LLM judged that the candidate beat the current kept baseline on the total tradeoff.
-- `discard` means the LLM judged that it did not, or the run violated a hard floor.
-- `crash` means the run failed structurally or exceeded the budget.
-- Exhausting the immediate local neighborhood is not by itself a blocker. Before you report a blocker, broaden the search inside the existing daily-data contract and continue experimenting.
+## Simplicity Criterion
 
-## Simplicity criterion
-
-All else equal, prefer smaller diffs. A tiny gain from a complicated hack is not worth much. A similar result with simpler code is valuable.
-
-## Timeout and crashes
-
-- If a run takes longer than 10 minutes total, treat it as a crash.
-- If the provider is missing, stop and tell the human exactly what path is expected.
-- If the idea crashes for a trivial reason, fix and rerun once. If it is fundamentally broken, discard it.
+All else equal, prefer smaller diffs and more interpretable factor-family changes.
 
 ## Continuation
 
-Once the loop begins, keep iterating until the human interrupts you.
+Once the loop begins, keep iterating until the human interrupts you or a real structural blocker appears.

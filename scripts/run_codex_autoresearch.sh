@@ -268,30 +268,30 @@ Read README.md and program.md as needed, but treat them as durable policy and st
 not as a reason to keep this single session alive forever.
 
 Complete exactly one full autoresearch iteration:
-1. Inspect git state, results.tsv, run.json, run.log, train.py, and the current kept baseline.
+1. Inspect git state, run_state.json, results.tsv, run.json, train.py, and the current kept baseline.
 2. If the web research policy applies and web search is available in this Codex mode, do a short research pass.
 3. If web search is unavailable in this mode, note that limitation briefly and continue with the best local hypothesis.
-4. If the latest keep's direct local neighborhood looks exhausted, do not stop immediately. Within the same daily-data contract, you may explicitly relax the local-search policy and do a broader factor-mining pass inside train.py before giving up.
-5. Modify only train.py for exactly one hypothesis that follows the repo policy.
-6. Commit the change.
-7. Run:
+4. Respect the v2 lane policy: factors first, labels second, strategy-only checks only as rare follow-ups after a new factor or label idea.
+5. If the latest keep's direct local neighborhood looks exhausted, do not stop immediately. Within the same daily-data contract, you may explicitly relax the local-search policy and do a broader factor-family pass inside train.py before giving up.
+6. Modify only train.py for exactly one hypothesis that follows the repo policy.
+7. Commit the change.
+8. Run:
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
    QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
    conda run -n qlib python train.py > run.log 2>&1
-8. Read run.json or run.log. The harness now emits provisional statuses:
+9. Read run.json first. Use run.log only for debugging if run.json is insufficient.
+10. The harness now emits provisional statuses:
    - candidate: metrics are available and you must decide keep/discard yourself.
    - hard_reject: the run violated a last-resort safety floor; normally discard it.
    - crash: the run failed structurally.
-9. If the harness status is candidate, compare it against the current kept baseline and decide keep/discard yourself. Use the full tradeoff, not a single fixed threshold.
-10. Also decide the experiment category yourself from factor|label|model|strategy|baseline|other.
-11. Finalize the latest provisional result before changing git state:
+11. If the harness status is candidate, compare it against the current kept baseline in the same backtest_version and decide keep/discard yourself. Use the full tradeoff, not a single fixed threshold.
+12. Also decide the experiment category yourself from factor|label|model|strategy|baseline|other.
+13. Finalize the latest provisional result before changing git state:
    python3 scripts/codex_supervisor_state.py finalize-result --repo-root . --decision keep|discard --category factor|label|model|strategy|baseline|other --reason "short reason"
-12. If the final decision is keep, keep the commit.
-13. If the final decision is discard, revert to the previous kept commit.
-14. If status is crash, fix once if the issue is trivial and the idea still makes sense; otherwise move on.
-15. Do not report a blocker just because the nearest local neighborhood looks exhausted. Keep widening the search inside train.py and keep running experiments.
-16. Only report a blocker for a true structural inability to proceed, such as a missing provider or a broken repository state that prevents any experiment from running at all.
-17. Leave the repository in a clean state that is ready for the next supervised iteration, then stop.
+14. If the final decision is keep, keep the commit.
+15. If the final decision is discard, revert to the previous kept train.py state.
+16. If status is crash, prefer the structured error in run.json; inspect raw traceback only if needed.
+17. Leave the repository in an idle state that is ready for the next supervised iteration, then stop.
 
 Do not ask whether to continue. The supervisor will launch the next step.
 Do not stop before either finishing one completed iteration or reporting a concrete blocker.

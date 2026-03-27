@@ -76,6 +76,16 @@ def last_run(root: Path) -> dict:
         return {}
 
 
+def run_state(root: Path) -> dict:
+    path = root / "run_state.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def ledger_counts(root: Path) -> dict[str, int]:
     path = root / "results.tsv"
     counts = {"total": 0, "keep": 0, "discard": 0, "crash": 0}
@@ -107,6 +117,16 @@ def state_lines(root: Path) -> list[str]:
             "Ledger: "
             f"total={counts['total']}, keep={counts['keep']}, "
             f"discard={counts['discard']}, crash={counts['crash']}"
+        )
+
+    state = run_state(root)
+    if state:
+        lines.append(
+            "Run state: "
+            f"phase={state.get('phase', 'unknown')}, "
+            f"latest_keep={state.get('latest_keep_commit') or 'n/a'}, "
+            f"latest_finalized={state.get('latest_finalized_commit') or 'n/a'}, "
+            f"candidate={state.get('current_candidate_commit') or 'n/a'}"
         )
 
     summary = last_run(root)
