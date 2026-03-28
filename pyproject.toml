@@ -1,0 +1,17 @@
+[project]
+name = "autoresearch"
+version = "0.1.0"
+description = "Autonomous A-share trading-alpha research harness"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "lightgbm==4.6.0",
+    "matplotlib==3.10.8",
+    "numpy==2.4.3",
+    "pandas==2.3.3",
+    "pyarrow==22.0.0",
+    "pyqlib==0.9.7",
+]
+
+[tool.uv]
+package = false

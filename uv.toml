@@ -1,0 +1,3 @@
+# Keep uv's cache inside the repository so project commands do not depend on
+# a writable global cache directory.
+cache-dir = "tmp/uv-cache"

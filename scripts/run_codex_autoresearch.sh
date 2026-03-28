@@ -281,7 +281,7 @@ Complete exactly one full autoresearch iteration:
 8. Run:
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
    QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
-   conda run -n qlib python train.py > run.log 2>&1
+   uv run python train.py > run.log 2>&1
 9. Read run.json first. Use run.log only for debugging if run.json is insufficient.
 10. The harness now emits provisional statuses:
    - candidate: metrics are available and you must decide keep/discard yourself.

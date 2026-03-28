@@ -47,9 +47,25 @@ The philosophy is the same as the original repo:
 cd /Users/zhaozhiyu/Projects/autoresearch
 mkdir -p tmp/mplconfig
 
+uv python install 3.12
+uv sync
+
 MPLCONFIGDIR=$PWD/tmp/mplconfig \
 QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
-conda run -n qlib python prepare.py --check
+uv run python prepare.py --check
+```
+
+Project defaults are pinned in configuration:
+
+- `.python-version` pins Python `3.12`
+- `uv.toml` pins the project cache directory to `tmp/uv-cache`
+
+You normally do **not** need to set `UV_CACHE_DIR`.
+Only set `UV_PYTHON_INSTALL_DIR` manually if your machine or sandbox cannot use uv's default
+Python installation directory, for example:
+
+```bash
+UV_PYTHON_INSTALL_DIR=$PWD/tmp/uv-python uv python install 3.12
 ```
 
 Then run the current experiment definition:
@@ -57,7 +73,7 @@ Then run the current experiment definition:
 ```bash
 MPLCONFIGDIR=$PWD/tmp/mplconfig \
 QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
-conda run -n qlib python train.py > run.log 2>&1
+uv run python train.py > run.log 2>&1
 ```
 
 After each run inspect:
@@ -68,8 +84,11 @@ After each run inspect:
 
 ## Runtime Notes
 
-- The repo does **not** use `uv` for experiments.
-- Use the existing `qlib` conda environment.
+- Use `uv` for dependency management and execution.
+- The expected Python runtime is 3.12.
+- The expected project environment is `.venv` managed by `uv`.
+- The project cache directory is configured in `uv.toml`; no extra `UV_CACHE_DIR` export is needed.
+- `UV_PYTHON_INSTALL_DIR` is only a fallback for restricted environments.
 - `prepare.py --check` is the only supported provider/runtime verification step.
 - `run.log` is a debug artifact, not the primary decision source.
 

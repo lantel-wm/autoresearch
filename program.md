@@ -22,10 +22,21 @@ To set up a new run, work with the user to:
 5. Verify runtime with:
 
    ```bash
+   uv python install 3.12
+   uv sync
+
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
    QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
-   conda run -n qlib python prepare.py --check
+   uv run python prepare.py --check
    ```
+
+   Notes:
+
+   - `.python-version` pins Python `3.12`.
+   - `uv.toml` already pins the cache directory to `tmp/uv-cache`.
+   - Do not set `UV_CACHE_DIR` unless you are intentionally overriding the project default.
+   - Only set `UV_PYTHON_INSTALL_DIR` if the host cannot use uv's default Python install
+     directory.
 
 6. Inspect `run_state.json`, `run.json`, and `results.tsv` before the first experiment step.
 
@@ -33,7 +44,9 @@ To set up a new run, work with the user to:
 
 - Modify `train.py` only.
 - Keep `prepare.py` read-only during the loop.
-- Run everything in the local `qlib` conda environment.
+- Run everything through the local `uv` project environment.
+- The expected Python runtime is 3.12.
+- The project-local uv cache is configured in `uv.toml`.
 - The fixed market is `ashare_mainboard_no_st`.
 - The fixed frequency is daily.
 - Supported fields are `open`, `high`, `low`, `close`, `volume`, `factor`, `turnover_rate`.
@@ -172,7 +185,7 @@ Repeat this cycle:
    ```bash
    MPLCONFIGDIR=$PWD/tmp/mplconfig \
    QLIB_PROVIDER_URI=${QLIB_PROVIDER_URI:-$PWD/data/qlib_bin_daily_hfq} \
-   conda run -n qlib python train.py > run.log 2>&1
+   uv run python train.py > run.log 2>&1
    ```
 
 6. Read `run.json` first. Do not use raw `run.log` as a primary decision input.

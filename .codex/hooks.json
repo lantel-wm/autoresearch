@@ -12,18 +12,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .codex/hooks/autoresearch_stop.py",
-            "timeoutSec": 10,
-            "statusMessage": "continuing autoresearch loop"
-          }
-        ]
-      }
     ]
   }
 }
