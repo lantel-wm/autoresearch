@@ -34,7 +34,8 @@ def build_experiment() -> ExperimentSpec:
             ),
             (
                 "($close / Ref($close, 55) - 1) * "
-                "Mean((($close > Ref($close, 1)) - ($close < Ref($close, 1))) * "
+                "Mean(((($close > Ref($close, 1)) * 1.0) + "
+                "(($close < Ref($close, 1)) * (-1.0))) * "
                 "(1 - Rank(Abs($close / Ref($close, 1) - 1), 55)), 55)",
                 "fip_idmag55",
             ),
