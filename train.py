@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][paper] trend_alignment runup_turncalm55",
+        description="[factor][paper] behavioral_trading negday_turnpressure5",
         feature_expressions=[
             ("($close - $open) / $open", "kmid"),
             ("($high - $low) / $open", "klen"),
@@ -40,11 +40,6 @@ def build_experiment() -> ExperimentSpec:
                 "Mean($close / $open - 1, 10) * "
                 "(Mean($turnover_rate, 5) / (Mean($turnover_rate, 20) + 1e-12))",
                 "intraday_mom_turn10",
-            ),
-            (
-                "Greater($close / Ref($close, 55) - 1, 0) * "
-                "(Mean($turnover_rate, 55) / (Mean($turnover_rate, 5) + 1e-12))",
-                "runup_turncalm55",
             ),
             (
                 "(($close / $open - 1) * ($close < $open)) * "
