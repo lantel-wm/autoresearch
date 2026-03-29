@@ -14,6 +14,8 @@ Options:
   --iterations N     Number of Codex invocations to run. Default: 0 (infinite).
   --sleep SECONDS    Delay between invocations. Default: 2.
   --model MODEL      Optional Codex model override.
+  --run-tag TAG      Optional experiment tag used when auto-creating
+                     `autoresearch/<tag>` from master/main.
   --web-search MODE  One of: cached, live, disabled. Default: cached.
   --sandbox-mode M   One of: read-only, workspace-write, danger-full-access.
                      Default: workspace-write.
@@ -39,6 +41,7 @@ default_pause_file="$repo_root/.codex/pause_supervisor"
 iterations=0
 sleep_seconds=2
 model=""
+run_tag=""
 web_search="cached"
 sandbox_mode="workspace-write"
 approval_policy="on-request"
@@ -68,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       model="$2"
+      shift 2
+      ;;
+    --run-tag)
+      run_tag="$2"
       shift 2
       ;;
     --web-search)
@@ -170,13 +177,80 @@ pause_requested() {
   [[ -e "${pause_file:-$default_pause_file}" ]]
 }
 
+protected_branch() {
+  case "$1" in
+    master|main)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+branch_exists() {
+  local branch="$1"
+  git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"
+}
+
+sanitize_run_tag() {
+  local value="$1"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  value="${value// /-}"
+  value="$(printf '%s' "$value" | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+  printf '%s' "$value"
+}
+
+resolve_experiment_branch_name() {
+  local tag candidate suffix
+  if [[ -n "$run_tag" ]]; then
+    tag="$(sanitize_run_tag "$run_tag")"
+    if [[ -z "$tag" ]]; then
+      printf 'Invalid --run-tag after sanitization: %s\n' "$run_tag" >&2
+      exit 1
+    fi
+    candidate="autoresearch/$tag"
+    if branch_exists "$candidate"; then
+      printf 'Experiment branch already exists: %s\n' "$candidate" >&2
+      exit 1
+    fi
+    printf '%s' "$candidate"
+    return 0
+  fi
+
+  tag="$(date '+%Y%m%d-%H%M%S')"
+  candidate="autoresearch/$tag"
+  suffix=1
+  while branch_exists "$candidate"; do
+    suffix=$((suffix + 1))
+    candidate="autoresearch/${tag}-${suffix}"
+  done
+  printf '%s' "$candidate"
+}
+
+ensure_experiment_branch() {
+  local source_branch target_branch
+  source_branch="$(git -C "$repo_root" branch --show-current)"
+  if ! protected_branch "$source_branch"; then
+    current_branch="$source_branch"
+    return 0
+  fi
+
+  target_branch="$(resolve_experiment_branch_name)"
+  git -C "$repo_root" switch -c "$target_branch" >/dev/null
+  current_branch="$target_branch"
+  current_signature="$current_branch"
+  printf '[%s] created experiment branch %s from %s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$target_branch" "$source_branch"
+}
+
 json_field() {
   local payload="$1"
   local field="$2"
   python3 -c 'import json,sys; data=json.loads(sys.argv[1]); value=data.get(sys.argv[2]); print("" if value is None else value)' "$payload" "$field"
 }
 
-run_preflight() {
+preflight_payload() {
   local payload
   payload="$(python3 "$state_helper" preflight --repo-root "$repo_root")"
   local ok
@@ -191,10 +265,23 @@ run_preflight() {
     fi
     exit 1
   fi
+  printf '%s' "$payload"
+}
+
+run_preflight() {
+  local payload reason
+  payload="$(preflight_payload)"
   current_branch="$(git -C "$repo_root" branch --show-current)"
+  if protected_branch "$current_branch"; then
+    ensure_experiment_branch
+    payload="$(preflight_payload)"
+    current_branch="$(git -C "$repo_root" branch --show-current)"
+  fi
+
   current_keep_commit="$(json_field "$payload" "latest_keep_commit")"
   current_signature="${current_branch}"
-  if [[ "$(json_field "$payload" "reason")" == "train_restore_required" ]]; then
+  reason="$(json_field "$payload" "reason")"
+  if [[ "$reason" == "train_restore_required" ]]; then
     git -C "$repo_root" show "${current_keep_commit}:train.py" > "$repo_root/train.py"
     git -C "$repo_root" commit -am "Restore kept train baseline" >/dev/null
     current_signature="${current_branch}"

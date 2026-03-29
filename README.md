@@ -128,6 +128,9 @@ For Codex, the recommended path remains the external supervisor launcher:
 ```
 
 The supervisor still exists for the same reason as before: interactive “never stop” behavior is not reliable enough on its own.
+When launched from `master` or `main`, the script now auto-creates a fresh
+`autoresearch/<tag>` branch before the first experiment step. Pass
+`--run-tag mytag` if you want to control the tag; otherwise it uses a timestamp.
 
 Important v3 operating rules:
 
