@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][paper] trend_alignment fip_lowjump55",
+        description="[factor][paper] trend_alignment fip_maxjump55",
         feature_expressions=[
             ("($close - $open) / $open", "kmid"),
             ("($high - $low) / $open", "klen"),
@@ -31,6 +31,12 @@ def build_experiment() -> ExperimentSpec:
                 "(Mean($close > Ref($close, 1), 55) - Mean($close < Ref($close, 1), 55))) / "
                 "(Std($close / Ref($close, 1) - 1, 55) + 1e-12))",
                 "fip_lowjump55",
+            ),
+            (
+                "((($close / Ref($close, 55) - 1) * "
+                "(Mean($close > Ref($close, 1), 55) - Mean($close < Ref($close, 1), 55))) / "
+                "(Max(Abs($close / Ref($close, 1) - 1), 55) + 1e-12))",
+                "fip_maxjump55",
             ),
             (
                 "($close / Ref($close, 5) - 1) * "
