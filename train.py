@@ -104,15 +104,15 @@ def build_experiment() -> ExperimentSpec:
                 "cgo_illiq55",
             ),
             (
-                "((Greater(0 - ($close / Ref($close, 20) - 1), 0) * "
+                "(((Greater(0 - ($close / Ref($close, 20) - 1), 0) * "
                 "Greater(0 - (((Sum(Ref($turnover_rate, 1) * Ref($close, 1), 55) / "
                 "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1), 0)) - "
                 "(Greater($close / Ref($close, 20) - 1, 0) * "
                 "Greater((((Sum(Ref($turnover_rate, 1) * Ref($close, 1), 55) / "
-                "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1, 0))) * "
+                "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1), 0))) * "
                 "Abs($close / Ref($close, 20) - 1) * "
                 "Abs((((Sum(Ref($turnover_rate, 1) * Ref($close, 1), 55) / "
-                "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1))",
+                "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1)))",
                 "cgo_overhang_contra20_55",
             ),
             (
