@@ -41,8 +41,8 @@ def build_experiment() -> ExperimentSpec:
             ),
             (
                 "($close / Ref($close, 20) - 1) * "
-                "((Mean($turnover_rate, 20) > Mean($turnover_rate, 120)) - "
-                "(Mean($turnover_rate, 20) < Mean($turnover_rate, 120)))",
+                "(((Mean($turnover_rate, 20) > Mean($turnover_rate, 120)) * 1.0) + "
+                "((Mean($turnover_rate, 20) < Mean($turnover_rate, 120)) * -1.0))",
                 "stmom_turnregime20_120",
             ),
             (
