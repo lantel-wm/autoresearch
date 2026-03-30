@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][paper] behavioral_trading shortrev_lowpth_lowturn20_55_120",
+        description="[factor][paper] behavioral_trading mindrop_losscrowd20_120",
         feature_expressions=[
             ("($close - $open) / $open", "kmid"),
             ("($high - $low) / $open", "klen"),
@@ -179,12 +179,6 @@ def build_experiment() -> ExperimentSpec:
                 "($close / Ref($close, 10) - 1) * "
                 "(Sum($open / Ref($close, 1) - 1, 20) / (Sum(Abs($open / Ref($close, 1) - 1), 20) + 1e-12))",
                 "mom_gap10",
-            ),
-            (
-                "Greater(0 - ($close / Ref($close, 20) - 1), 0) * "
-                "(Mean($turnover_rate, 120) / (Mean($turnover_rate, 20) + 1e-12)) * "
-                "((Max($high, 55) - $close) / (Max($high, 55) + 1e-12))",
-                "shortrev_lowpth_lowturn20_55_120",
             ),
             ("Mean($close, 55) / $close", "ma55"),
             ("Std($close, 55) / $close", "std55"),
