@@ -40,7 +40,7 @@ def build_experiment() -> ExperimentSpec:
                 "dailymom_turnstable20",
             ),
             (
-                "(-Max($close / Ref($close, 1) - 1, 20)) * "
+                "((0 - Max($close / Ref($close, 1) - 1, 20))) * "
                 "(Mean($turnover_rate, 20) / (Mean($turnover_rate, 120) + 1e-12))",
                 "negmax_turncrowd20_120",
             ),
