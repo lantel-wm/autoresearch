@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][paper] overnight_gap posday_gapfollow_turncrowd20_120",
+        description="[factor][paper] behavioral_trading mindrop_losscrowd20_120",
         feature_expressions=[
             ("($close - $open) / $open", "kmid"),
             ("($high - $low) / $open", "klen"),
@@ -86,14 +86,6 @@ def build_experiment() -> ExperimentSpec:
                 "(($close / $open - 1) * ($close > $open)) * "
                 "($turnover_rate / (Mean($turnover_rate, 20) + 1e-12))",
                 "posday_turnshock1",
-            ),
-            (
-                "(Mean(Greater(Ref($close, 1) / Ref($open, 1) - 1, 0) * "
-                "(Ref($close, 1) / Ref($open, 1) - 1) * "
-                "($open / Ref($close, 1) - 1), 20) / "
-                "(Std($open / Ref($close, 1) - 1, 20) + 1e-12)) * "
-                "(Mean($turnover_rate, 20) / (Mean($turnover_rate, 120) + 1e-12))",
-                "posday_gapfollow_turncrowd20_120",
             ),
             (
                 "Mean(Abs($close / $open - 1) * ($close < $open) * "
