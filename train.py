@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][paper] behavioral_trading negmax_turncrowd20_120",
+        description="[factor][paper] behavioral_trading negmax_losscrowd20_120",
         feature_expressions=[
             ("($close - $open) / $open", "kmid"),
             ("($high - $low) / $open", "klen"),
@@ -43,6 +43,12 @@ def build_experiment() -> ExperimentSpec:
                 "((0 - Max($close / Ref($close, 1) - 1, 20))) * "
                 "(Mean($turnover_rate, 20) / (Mean($turnover_rate, 120) + 1e-12))",
                 "negmax_turncrowd20_120",
+            ),
+            (
+                "((0 - Max($close / Ref($close, 1) - 1, 20))) * "
+                "(Mean($turnover_rate, 20) / (Mean($turnover_rate, 120) + 1e-12)) * "
+                "Greater(0 - ($close / Ref($close, 20) - 1), 0)",
+                "negmax_losscrowd20_120",
             ),
             (
                 "((($close / Ref($close, 55) - 1) * "
