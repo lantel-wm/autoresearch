@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][paper] trend_alignment overnight_tstat55",
+        description="[factor][paper] behavioral_trading mindrop_losscrowd20_120",
         feature_expressions=[
             ("($close - $open) / $open", "kmid"),
             ("($high - $low) / $open", "klen"),
@@ -115,11 +115,6 @@ def build_experiment() -> ExperimentSpec:
             (
                 "Sum($open / Ref($close, 1) - 1, 20) / (Sum(Abs($open / Ref($close, 1) - 1), 20) + 1e-12)",
                 "gap_sumd20",
-            ),
-            (
-                "Mean($open / Ref($close, 1) - 1, 55) / "
-                "(Std($open / Ref($close, 1) - 1, 55) + 1e-12)",
-                "overnight_tstat55",
             ),
             (
                 "(Mean((($close - $open) / (Ref($close, 1) - $open + 1e-12)) * "
