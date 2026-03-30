@@ -12,7 +12,7 @@ from prepare import ExperimentSpec, run_experiment
 
 def build_experiment() -> ExperimentSpec:
     return ExperimentSpec(
-        description="[factor][paper] behavioral_trading cgo_signflip_contra5_55",
+        description="[factor][paper] behavioral_trading mindrop_losscrowd20_120",
         feature_expressions=[
             ("($close - $open) / $open", "kmid"),
             ("($high - $low) / $open", "klen"),
@@ -102,15 +102,6 @@ def build_experiment() -> ExperimentSpec:
                 "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1) * "
                 "Mean(Abs($close / Ref($close, 1) - 1) / ($turnover_rate + 1e-12), 20))",
                 "cgo_illiq55",
-            ),
-            (
-                "(Greater(0 - (((Sum(Ref($turnover_rate, 1) * Ref($close, 1), 55) / "
-                "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1), 0) * "
-                "Greater(0 - ($close / Ref($close, 5) - 1), 0)) - "
-                "(Greater((((Sum(Ref($turnover_rate, 1) * Ref($close, 1), 55) / "
-                "(Sum(Ref($turnover_rate, 1), 55) + 1e-12)) / $close) - 1), 0) * "
-                "Greater($close / Ref($close, 5) - 1, 0))",
-                "cgo_signflip_contra5_55",
             ),
             (
                 "($close / Ref($close, 10) - 1) * "
